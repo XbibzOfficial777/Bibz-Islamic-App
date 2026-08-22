@@ -123,6 +123,8 @@ jobs:
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$APKSIGNER"
           for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
+            signed_apk="${apk%.apk}.signed.apk"
+            rm -f "$signed_apk" "$signed_apk.idsig" "$apk.idsig"
             "$APKSIGNER" sign \
               --ks android/upload-keystore.jks \
               --ks-key-alias "$KEY_ALIAS" \
@@ -131,16 +133,13 @@ jobs:
               --v2-signing-enabled true \
               --v3-signing-enabled true \
               --v4-signing-enabled true \
+              --out "$signed_apk" \
               "$apk"
-            "$APKSIGNER" sign \
-              --ks android/upload-keystore.jks \
-              --ks-key-alias "$KEY_ALIAS" \
-              --ks-pass env:KEYSTORE_PASSWORD \
-              --key-pass env:KEY_PASSWORD \
-              --v4-signing-enabled only \
-              "$apk"
+            mv "$signed_apk" "$apk"
+            mv "$signed_apk.idsig" "$apk.idsig"
             "$APKSIGNER" verify --verbose --print-certs "$apk"
             test -s "$apk.idsig"
+            printf 'V4 idsig generated: %s\\n' "$apk.idsig"
           done
 
       - name: Normalize release filenames
