@@ -93,10 +93,11 @@ class DiagnosticFileStore {
   }
 
   static Future<List<DiagnosticLogFile>> list() async {
+    List<DiagnosticLogFile> nativeFiles = const <DiagnosticLogFile>[];
     try {
       final result = await _channel.invokeMethod<List<Object?>>('listLogs');
       if (result != null) {
-        return result
+        nativeFiles = result
             .whereType<Map<Object?, Object?>>()
             .map(DiagnosticLogFile.fromMap)
             .toList();
@@ -114,22 +115,27 @@ class DiagnosticFileStore {
     try {
       final root = await getApplicationSupportDirectory();
       final directory = Directory('${root.path}/QuranX/Logs');
-      if (!await directory.exists()) return const <DiagnosticLogFile>[];
-      final files = await directory
-          .list()
-          .where((entity) => entity is File && entity.path.endsWith('.txt'))
-          .toList();
-      return files
-          .whereType<File>()
-          .map(
+      final fallbackFiles = <DiagnosticLogFile>[];
+      if (await directory.exists()) {
+        final files = await directory
+            .list()
+            .where((entity) => entity is File && entity.path.endsWith('.txt'))
+            .toList();
+        fallbackFiles.addAll(
+          files.whereType<File>().map(
             (file) => DiagnosticLogFile(
               name: file.uri.pathSegments.last,
               path: file.path,
               displayPath: file.path,
             ),
-          )
-          .toList()
-        ..sort((a, b) => b.name.compareTo(a.name));
+          ),
+        );
+      }
+      final byName = <String, DiagnosticLogFile>{
+        for (final file in nativeFiles) file.name: file,
+        for (final file in fallbackFiles) file.name: file,
+      };
+      return byName.values.toList()..sort((a, b) => b.name.compareTo(a.name));
     } catch (error, stack) {
       developer.log(
         'Diagnostic fallback listing failed: $error',
@@ -192,8 +198,11 @@ class DiagnosticFileStore {
   }
 }
 
+enum DiagnosticLevel { info, warning, error }
+
 class DiagnosticLog {
   static final List<String> entries = <String>[];
+  static final ValueNotifier<int> revision = ValueNotifier<int>(0);
   static final Map<String, String> _fileNames = <String, String>{};
   static final Map<String, Future<void>> _pendingWrites =
       <String, Future<void>>{};
@@ -217,16 +226,54 @@ class DiagnosticLog {
     StackTrace stack, {
     String context = 'unknown',
   }) {
+    return recordEvent(
+      DiagnosticLevel.error,
+      message: '$error',
+      context: context,
+      error: error,
+      stack: stack,
+    );
+  }
+
+  static String recordInfo(String message, {String context = 'unknown'}) {
+    return recordEvent(
+      DiagnosticLevel.info,
+      message: message,
+      context: context,
+    );
+  }
+
+  static String recordWarning(
+    String message, {
+    String context = 'unknown',
+    StackTrace? stack,
+  }) {
+    return recordEvent(
+      DiagnosticLevel.warning,
+      message: message,
+      context: context,
+      stack: stack,
+    );
+  }
+
+  static String recordEvent(
+    DiagnosticLevel level, {
+    required String message,
+    required String context,
+    Object? error,
+    StackTrace? stack,
+  }) {
     final now = DateTime.now();
     final timestamp = now.toUtc().toIso8601String();
-    final detail = [
-      '[$timestamp] QuranX error',
+    final lines = <String>[
+      '[$timestamp] QuranX ${level.name}',
+      'level: ${level.name}',
       'context: $context',
-      'error: ${error.runtimeType}',
-      'message: $error',
-      'stackTrace:',
-      stack.toString(),
-    ].join('\n');
+      if (error != null) 'error: ${error.runtimeType}',
+      'message: $message',
+      if (stack != null) ...['stackTrace:', stack.toString()],
+    ];
+    final detail = lines.join('\n');
     final fileName = _fileName(now);
     entries.add(detail);
     _fileNames[detail] = fileName;
@@ -234,6 +281,7 @@ class DiagnosticLog {
       final removed = entries.removeAt(0);
       _fileNames.remove(removed);
     }
+    revision.value++;
     unawaited(_saveEntries());
     final pendingWrite = _writeFile(fileName, detail);
     _pendingWrites[fileName] = pendingWrite;
@@ -262,6 +310,12 @@ class DiagnosticLog {
   static Future<void> _writeFile(String fileName, String detail) async {
     try {
       await DiagnosticFileStore.write(name: fileName, contents: detail);
+    } catch (error, stack) {
+      developer.log(
+        'Diagnostic TXT write failed for $fileName: $error',
+        name: 'QuranX.diagnostics',
+        stackTrace: stack,
+      );
     } finally {
       _pendingWrites.remove(fileName);
     }
@@ -279,6 +333,7 @@ class DiagnosticLog {
   static Future<void> deleteForDetail(String detail) async {
     final fileName = _fileNames.remove(detail);
     entries.remove(detail);
+    revision.value++;
     await _saveEntries();
     if (fileName != null) {
       await _pendingWrites[fileName];
@@ -295,6 +350,7 @@ class DiagnosticLog {
       _fileNames.remove(detail);
     }
     entries.removeWhere(matching.contains);
+    if (matching.isNotEmpty) revision.value++;
     await _saveEntries();
     await _pendingWrites[fileName];
     await DiagnosticFileStore.delete(fileName);
@@ -305,6 +361,7 @@ class DiagnosticLog {
     if (pending.isNotEmpty) await Future.wait(pending);
     entries.clear();
     _fileNames.clear();
+    revision.value++;
     await _saveEntries();
     await DiagnosticFileStore.deleteAll();
   }

@@ -2,14 +2,39 @@ part of '../main.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    DiagnosticLog.record(
-      details.exception,
-      details.stack ?? StackTrace.current,
-      context: 'flutter.framework',
-    );
+
+  final previousDebugPrint = debugPrint;
+  var presentingFlutterError = false;
+  debugPrint = (String? message, {int? wrapWidth}) {
+    if (!presentingFlutterError &&
+        message != null &&
+        message.trim().isNotEmpty) {
+      DiagnosticLog.recordInfo(message, context: 'flutter.debugPrint');
+    }
+    previousDebugPrint(message, wrapWidth: wrapWidth);
   };
+
+  FlutterError.onError = (details) {
+    final stack = details.stack ?? StackTrace.current;
+    DiagnosticLog.recordEvent(
+      DiagnosticLevel.error,
+      message: details.exceptionAsString(),
+      context: 'flutter.framework',
+      error: details.exception,
+      stack: stack,
+    );
+    presentingFlutterError = true;
+    try {
+      FlutterError.presentError(details);
+    } finally {
+      presentingFlutterError = false;
+    }
+  };
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    DiagnosticLog.record(error, stack, context: 'flutter.platform');
+    return true;
+  };
+
   final preferences = await SharedPreferences.getInstance();
   await DiagnosticLog.initialize(preferences);
   final repository = QuranRepository(QuranApiClient(), LocalStore(preferences));

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';

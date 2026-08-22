@@ -176,3 +176,12 @@ The supplied `adan_madinah_32_16.mp3` is bundled as `assets/audio/adhan_madinah.
 Issue #1 remains covered as a real network-stream regression: a connection that closes while Quran data is arriving must remain a retryable diagnostic error and must never be interpreted as proof that the Surah does not exist.
 
 Background behavior is implemented as resilient scheduling, not an impossible promise that a process can run forever. Android may restrict location updates, stop foreground services, enforce battery policies, or reject a service after Force Stop. QuranX therefore caches validated schedules, schedules local notifications ahead of time, refreshes after a GPS-enabled user action and eligible system events, and surfaces permission or stale-data state instead of silently claiming continuous 24-hour execution.
+
+
+## Diagnostics reliability update
+
+The diagnostics screen now renders its session detail as a non-scrollable column inside the outer log list. This avoids the nested `ListView` layout that caused the dedicated Log Kesalahan screen to appear empty even while an error was visible on the originating screen.
+
+Diagnostic entries now include an explicit `info`, `warning`, or `error` level. QuranX captures framework errors through `FlutterError.onError`, uncaught platform errors through `PlatformDispatcher.onError`, and Flutter `debugPrint` output through a guarded bridge. Each event is persisted to the bounded session history and written to its timestamped TXT file. The diagnostics screen listens to a revision notifier, so a newly recorded event appears without requiring the user to leave and reopen the screen.
+
+The original `prayer.gps` error from Issue #1 is now recorded through the same path as reader, audio, and download failures. If public storage is unavailable, the preference-backed session history remains available as a recovery fallback; storage errors themselves are logged through the developer channel without recursively creating a second diagnostic failure.

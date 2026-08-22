@@ -157,6 +157,45 @@ void main() {
     );
   });
 
+  test('diagnostic log persists info and warning levels', () async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    await DiagnosticLog.initialize(preferences);
+    final info = DiagnosticLog.recordInfo(
+      'Flutter informational event',
+      context: 'test.info',
+    );
+    final warning = DiagnosticLog.recordWarning(
+      'Flutter warning event',
+      context: 'test.warning',
+      stack: StackTrace.current,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(info, contains('level: info'));
+    expect(warning, contains('level: warning'));
+    expect(warning, contains('stackTrace:'));
+    expect(preferences.getStringList('diagnostic_log'), contains(info));
+    expect(preferences.getStringList('diagnostic_log'), contains(warning));
+  });
+
+  testWidgets('diagnostics screen renders the current log and actions', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    await DiagnosticLog.initialize(preferences);
+    DiagnosticLog.recordWarning(
+      'visible diagnostics warning',
+      context: 'test.screen',
+    );
+    await tester.pumpWidget(const MaterialApp(home: DiagnosticsScreen()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.textContaining('visible diagnostics warning'), findsOneWidget);
+    expect(find.text('Copy Full Error Log'), findsOneWidget);
+    expect(find.text('Report Issue'), findsOneWidget);
+  });
+
   testWidgets('error details exposes copy and report actions', (
     WidgetTester tester,
   ) async {

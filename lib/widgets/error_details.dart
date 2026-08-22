@@ -7,12 +7,14 @@ class ErrorDetailsView extends StatelessWidget {
     required this.detail,
     this.onRetry,
     this.onLogConsumed,
+    this.scrollable = true,
   });
 
   final String title;
   final String detail;
   final VoidCallback? onRetry;
   final Future<void> Function()? onLogConsumed;
+  final bool scrollable;
 
   String _issueBody() {
     const maxReportLength = 7000;
@@ -70,61 +72,69 @@ class ErrorDetailsView extends StatelessWidget {
     }
   }
 
-  @override
-  Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.all(24),
-    children: [
-      Icon(
-        Icons.error_outline,
-        size: 56,
-        color: Theme.of(context).colorScheme.error,
-      ),
-      const SizedBox(height: 12),
-      Text(
-        title,
-        style: Theme.of(context).textTheme.titleLarge,
-        textAlign: TextAlign.center,
-      ),
-      const SizedBox(height: 8),
-      const Text(
-        'Data valid sebelumnya tetap dipertahankan. Salin log lengkap atau laporkan masalah dengan detail teknis yang sudah diisi.',
-        textAlign: TextAlign.center,
-      ),
-      const SizedBox(height: 16),
-      SelectableText(
-        detail,
-        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-      ),
-      const SizedBox(height: 16),
-      FilledButton.icon(
-        onPressed: () async {
-          await Clipboard.setData(ClipboardData(text: detail));
-          if (onLogConsumed != null) await onLogConsumed!();
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Full error log disalin dan dihapus.'),
-              ),
-            );
-          }
-        },
-        icon: const Icon(Icons.copy),
-        label: const Text('Copy Full Error Log'),
-      ),
+  List<Widget> _children(BuildContext context) => [
+    Icon(
+      Icons.error_outline,
+      size: 56,
+      color: Theme.of(context).colorScheme.error,
+    ),
+    const SizedBox(height: 12),
+    Text(
+      title,
+      style: Theme.of(context).textTheme.titleLarge,
+      textAlign: TextAlign.center,
+    ),
+    const SizedBox(height: 8),
+    const Text(
+      'Data valid sebelumnya tetap dipertahankan. Salin log lengkap atau laporkan masalah dengan detail teknis yang sudah diisi.',
+      textAlign: TextAlign.center,
+    ),
+    const SizedBox(height: 16),
+    SelectableText(
+      detail,
+      style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+    ),
+    const SizedBox(height: 16),
+    FilledButton.icon(
+      onPressed: () async {
+        await Clipboard.setData(ClipboardData(text: detail));
+        if (onLogConsumed != null) await onLogConsumed!();
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Full error log disalin dan dihapus.'),
+            ),
+          );
+        }
+      },
+      icon: const Icon(Icons.copy),
+      label: const Text('Copy Full Error Log'),
+    ),
+    const SizedBox(height: 8),
+    OutlinedButton.icon(
+      onPressed: () => _reportIssue(context),
+      icon: const Icon(Icons.bug_report_outlined),
+      label: const Text('Report Issue'),
+    ),
+    if (onRetry != null) ...[
       const SizedBox(height: 8),
       OutlinedButton.icon(
-        onPressed: () => _reportIssue(context),
-        icon: const Icon(Icons.bug_report_outlined),
-        label: const Text('Report Issue'),
+        onPressed: onRetry,
+        icon: const Icon(Icons.refresh),
+        label: const Text('Coba lagi'),
       ),
-      if (onRetry != null) ...[
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: onRetry,
-          icon: const Icon(Icons.refresh),
-          label: const Text('Coba lagi'),
-        ),
-      ],
     ],
-  );
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final content = _children(context);
+    if (scrollable) {
+      return ListView(padding: const EdgeInsets.all(24), children: content);
+    }
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(children: content),
+    );
+  }
 }

@@ -102,10 +102,14 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          ErrorDetailsView(
-            title: 'Diagnostik sesi QuranX',
-            detail: DiagnosticLog.all,
-            onLogConsumed: DiagnosticLog.clearAll,
+          ValueListenableBuilder<int>(
+            valueListenable: DiagnosticLog.revision,
+            builder: (context, _, child) => ErrorDetailsView(
+              title: 'Diagnostik sesi QuranX',
+              detail: DiagnosticLog.all,
+              onLogConsumed: DiagnosticLog.clearAll,
+              scrollable: false,
+            ),
           ),
           const Divider(height: 28),
           Text(
