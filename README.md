@@ -146,3 +146,20 @@ The Report Issue action deliberately does not embed a GitHub personal access tok
 The attached field report showed duplicate entries for the same audio failure: `AudioController.playUrl` recorded `PlayerInterruptedException`, then `_ReaderScreenState._playAyah` recorded the same exception again. QuranX now records the user-facing playback failure once, prevents overlapping player loads, stops the previous source before loading a new one, and still retains the full stack trace for the report flow.
 
 The v1.1.1 CI build exposed an Android Lint parser failure inside `url_launcher_android` 6.3.32 (`JavaDocParser`/`List.removeLast`). This was a tooling/library lint crash, not an application source error. QuranX pins `url_launcher_android` to 6.3.31 until the newer patch is compatible with the pinned AGP/runner toolchain; the pin is covered by CI analysis and Android build verification.
+
+
+## QuranX v1.3 feature foundation
+
+QuranX now keeps Surah and Juz search synchronized with the current query. Results update locally while typing, network searches are debounced, and stale responses are ignored when the query or mode has changed. The existing API-backed Surah search uses `q`, while Juz search remains local-first because the API does not expose a verified Juz index.
+
+Quran and audio downloads are now owned by an application-scoped `background_downloader` coordinator rather than a screen-scoped HTTP client. Tasks are enqueued with persistent tracking, retries, pause/resume support, progress updates, and Android notification-bar progress. Quran JSON responses are parsed and validated before being saved to local storage. Audio files are size-checked before their path is persisted. Android cannot guarantee survival after a user force-stops the app or an OEM battery manager terminates it; QuranX preserves retryable state and exposes cancellation and retry behavior where the platform permits it.
+
+Completed Quran and audio downloads can be removed from the download manager. Every removal requires an explicit confirmation dialog and removes only the selected asset. A Quran deletion removes the persisted validated Surah record and its downloaded file; audio deletion removes the audio file and its metadata.
+
+Tajwid Mode now presents detected API rule groups using distinct color markers and an accessible text legend. The current QuranX API response does not provide verified per-character ranges, so QuranX does not color arbitrary Arabic letters. The UI states this limitation rather than presenting false character-level Tajwid highlighting.
+
+The same API provides live city and prayer schedule routes. City search uses `GET /api/v1/falak/cities?q=<text>`, and a schedule uses `GET /api/v1/falak/prayer-times?cityId=<id>&date=YYYY-MM-DD`. The schedule parser requires `isLiveDataFromInternet`, matching city ID/date, Kemenag source, and all required time fields. The API can return an astronomical fallback for an invalid city while still setting `success: true`; QuranX rejects that fallback as an invalid selected-city schedule.
+
+The Jadwal Sholat screen can search cities in realtime, display the verified daily schedule, and schedule seven days of named notifications for Subuh, Dzuhur, Ashar, Maghrib, and Isya using timezone-aware Android local notifications. Notifications are scheduled inexactly to avoid claiming exact-alarm privileges that may not be appropriate for every distribution channel, and Android/OEM restrictions may still affect delivery.
+
+The current same API does not advertise or expose a verified adzan/muadzin audio catalog. QuranX therefore does not show fake voice choices and does not download Surah recitations as if they were adzan recordings. Selectable offline adzan voices will be added only when the API provides a real catalog and stable audio URLs, or after an explicit user-approved audio asset source is supplied.

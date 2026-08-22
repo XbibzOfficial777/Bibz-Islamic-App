@@ -516,6 +516,555 @@ class AudioController extends ChangeNotifier {
   }
 }
 
+class PrayerCity {
+  const PrayerCity({required this.id, required this.name});
+
+  final String id;
+  final String name;
+
+  factory PrayerCity.fromJson(Map<String, dynamic> json) => PrayerCity(
+    id: '${json['id']}',
+    name: json['lokasi'] as String? ?? 'Wilayah tidak bernama',
+  );
+}
+
+class PrayerSchedule {
+  const PrayerSchedule({
+    required this.cityId,
+    required this.cityName,
+    required this.regionName,
+    required this.date,
+    required this.times,
+  });
+
+  final int cityId;
+  final String cityName;
+  final String regionName;
+  final DateTime date;
+  final Map<String, String> times;
+
+  static const names = <String>[
+    'imsak',
+    'subuh',
+    'terbit',
+    'dhuha',
+    'dzuhur',
+    'ashar',
+    'maghrib',
+    'isya',
+  ];
+
+  factory PrayerSchedule.fromApi(
+    Map<String, dynamic> body, {
+    required int requestedCityId,
+    required DateTime requestedDate,
+  }) {
+    if (body['success'] != true) {
+      throw ApiException(
+        body['message'] as String? ?? 'Jadwal sholat gagal dimuat',
+      );
+    }
+    final data = Map<String, dynamic>.from(body['data'] as Map);
+    if (data['isLiveDataFromInternet'] != true || data['schedule'] is! Map) {
+      throw const FormatException(
+        'Respons bukan jadwal Kemenag live untuk kota yang dipilih',
+      );
+    }
+    final city = Map<String, dynamic>.from(data['cityInfo'] as Map);
+    final cityId = int.tryParse('${city['id']}');
+    if (cityId == null || cityId != requestedCityId) {
+      throw const FormatException('Kota pada respons API tidak sesuai pilihan');
+    }
+    final rawSchedule = Map<String, dynamic>.from(data['schedule'] as Map);
+    final isoDate = rawSchedule['date'] as String?;
+    final date = isoDate == null ? null : DateTime.tryParse(isoDate);
+    if (date == null ||
+        date.year != requestedDate.year ||
+        date.month != requestedDate.month ||
+        date.day != requestedDate.day) {
+      throw const FormatException('Tanggal jadwal API tidak sesuai permintaan');
+    }
+    final times = <String, String>{};
+    for (final name in names) {
+      final value = rawSchedule[name];
+      if (value is! String || !RegExp(r'^\d{2}:\d{2}$').hasMatch(value)) {
+        throw FormatException('Waktu sholat $name tidak valid');
+      }
+      times[name] = value;
+    }
+    return PrayerSchedule(
+      cityId: cityId,
+      cityName: city['lokasi'] as String? ?? 'Wilayah tidak bernama',
+      regionName: city['daerah'] as String? ?? '',
+      date: DateTime(date.year, date.month, date.day),
+      times: times,
+    );
+  }
+}
+
+class PrayerApiClient {
+  PrayerApiClient({http.Client? client}) : _client = client ?? http.Client();
+
+  final http.Client _client;
+
+  Future<List<PrayerCity>> searchCities(String query) async {
+    final encoded = Uri.encodeQueryComponent(query.trim());
+    final response = await _client
+        .get(Uri.parse('$apiBaseUrl/falak/cities?q=$encoded'))
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw ApiException('Daftar kota gagal: HTTP ${response.statusCode}');
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    if (body['success'] != true) {
+      throw ApiException(body['message'] as String? ?? 'Daftar kota gagal');
+    }
+    final data = Map<String, dynamic>.from(body['data'] as Map);
+    return (data['cities'] as List)
+        .map(
+          (item) => PrayerCity.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList();
+  }
+
+  Future<PrayerSchedule> fetchSchedule(int cityId, DateTime date) async {
+    final dateText =
+        '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+    final response = await _client
+        .get(
+          Uri.parse(
+            '$apiBaseUrl/falak/prayer-times?cityId=$cityId&date=$dateText',
+          ),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw ApiException('Jadwal sholat gagal: HTTP ${response.statusCode}');
+    }
+    return PrayerSchedule.fromApi(
+      jsonDecode(response.body) as Map<String, dynamic>,
+      requestedCityId: cityId,
+      requestedDate: date,
+    );
+  }
+
+  void dispose() => _client.close();
+}
+
+class PrayerReminderService {
+  PrayerReminderService(this.preferences);
+
+  final SharedPreferences preferences;
+  final FlutterLocalNotificationsPlugin plugin =
+      FlutterLocalNotificationsPlugin();
+  bool _initialized = false;
+
+  Future<void> initialize() async {
+    if (_initialized) return;
+    tz.initializeTimeZones();
+    const settings = InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    );
+    await plugin.initialize(settings: settings);
+    _initialized = true;
+  }
+
+  Future<bool> requestNotificationPermission() async {
+    await initialize();
+    final android = plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    return await android?.requestNotificationsPermission() ?? true;
+  }
+
+  int _notificationId(String name, int dayOffset) =>
+      5000 + dayOffset * 10 + PrayerSchedule.names.indexOf(name);
+
+  AndroidNotificationDetails get _androidDetails =>
+      const AndroidNotificationDetails(
+        'quranx_prayer_times',
+        'Jadwal Sholat QuranX',
+        channelDescription: 'Pengingat waktu sholat QuranX',
+        importance: Importance.max,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.alarm,
+      );
+
+  Future<void> schedule(
+    PrayerSchedule schedule, {
+    int leadMinutes = 0,
+    int dayOffset = 0,
+    bool clearExisting = true,
+  }) async {
+    await initialize();
+    final granted = await requestNotificationPermission();
+    if (!granted) {
+      throw const FileSystemException(
+        'Izin notifikasi belum diberikan untuk pengingat sholat.',
+      );
+    }
+    if (clearExisting) await plugin.cancelAll();
+    final now = tz.TZDateTime.now(tz.local);
+    final details = NotificationDetails(android: _androidDetails);
+    for (final name in const ['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya']) {
+      final parts = schedule.times[name]!.split(':');
+      final hour = int.parse(parts[0]);
+      final minute = int.parse(parts[1]);
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        throw const FormatException('Komponen waktu sholat tidak valid');
+      }
+      final base = tz.TZDateTime(
+        tz.local,
+        schedule.date.year,
+        schedule.date.month,
+        schedule.date.day,
+        hour,
+        minute,
+      );
+      final scheduled = base.subtract(Duration(minutes: leadMinutes));
+      if (!scheduled.isAfter(now)) continue;
+      await plugin.zonedSchedule(
+        id: _notificationId(name, dayOffset),
+        title: 'Notifikasi Sholat ${_displayName(name)}',
+        body:
+            '${_displayName(name)} ${schedule.times[name]} • ${schedule.cityName}',
+        scheduledDate: scheduled,
+        notificationDetails: details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: '${schedule.cityId}|${schedule.date.toIso8601String()}|$name',
+      );
+    }
+    await preferences.setString('prayer_city_id', '${schedule.cityId}');
+    await preferences.setString('prayer_city_name', schedule.cityName);
+    await preferences.setString(
+      'prayer_schedule_date',
+      schedule.date.toIso8601String(),
+    );
+  }
+
+  Future<void> scheduleSevenDays(
+    PrayerApiClient api,
+    int cityId, {
+    int leadMinutes = 0,
+  }) async {
+    await initialize();
+    final granted = await requestNotificationPermission();
+    if (!granted) {
+      throw const FileSystemException(
+        'Izin notifikasi belum diberikan untuk pengingat sholat.',
+      );
+    }
+    await plugin.cancelAll();
+    final today = DateTime.now();
+    PrayerSchedule? first;
+    for (var offset = 0; offset < 7; offset++) {
+      final date = DateTime(today.year, today.month, today.day + offset);
+      final value = await api.fetchSchedule(cityId, date);
+      first ??= value;
+      await schedule(
+        value,
+        leadMinutes: leadMinutes,
+        dayOffset: offset,
+        clearExisting: false,
+      );
+    }
+    if (first != null) {
+      await preferences.setString('prayer_city_id', '$cityId');
+      await preferences.setString('prayer_city_name', first.cityName);
+    }
+  }
+
+  Future<void> cancel() async {
+    await initialize();
+    await plugin.cancelAll();
+  }
+
+  static String _displayName(String name) {
+    switch (name) {
+      case 'subuh':
+        return 'Subuh';
+      case 'dzuhur':
+        return 'Dzuhur';
+      case 'ashar':
+        return 'Ashar';
+      case 'maghrib':
+        return 'Maghrib';
+      case 'isya':
+        return 'Isya';
+      default:
+        return name[0].toUpperCase() + name.substring(1);
+    }
+  }
+
+  void dispose() {}
+}
+
+class BackgroundDownloadCoordinator extends ChangeNotifier {
+  BackgroundDownloadCoordinator(this.repository);
+
+  final QuranRepository repository;
+  final FileDownloader downloader = FileDownloader();
+  final Map<String, double> progress = <String, double>{};
+  final Map<String, String> errors = <String, String>{};
+  final Map<String, DownloadTask> _tasks = <String, DownloadTask>{};
+  final Map<String, String> _taskIds = <String, String>{};
+  StreamSubscription<TaskUpdate>? _updates;
+  bool _initialized = false;
+  bool _notificationPermissionRequested = false;
+
+  Future<void> initialize() async {
+    if (_initialized) return;
+    _initialized = true;
+    downloader.configureNotification(
+      running: const TaskNotification(
+        'QuranX sedang mengunduh',
+        '{displayName} • {progress}',
+      ),
+      complete: const TaskNotification(
+        'Unduhan QuranX selesai',
+        '{displayName}',
+      ),
+      error: const TaskNotification('Unduhan QuranX gagal', '{displayName}'),
+      paused: const TaskNotification('Unduhan QuranX dijeda', '{displayName}'),
+      canceled: const TaskNotification(
+        'Unduhan QuranX dibatalkan',
+        '{displayName}',
+      ),
+      progressBar: true,
+    );
+    _updates = downloader.updates.listen(_handleUpdate);
+    await downloader.start(autoCleanDatabase: true);
+  }
+
+  Future<void> _ensureInitialized() async {
+    if (!_initialized) await initialize();
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    if (_notificationPermissionRequested) return;
+    _notificationPermissionRequested = true;
+    final permission = PermissionType.notifications;
+    var status = await downloader.permissions.status(permission);
+    if (status != PermissionStatus.granted) {
+      status = await downloader.permissions.request(permission);
+    }
+    if (status != PermissionStatus.granted) {
+      throw const FileSystemException(
+        'Izin notifikasi diperlukan agar progress unduhan terlihat di bar notifikasi.',
+      );
+    }
+  }
+
+  String _key(String type, int number) => '$type:$number';
+
+  bool hasSurah(int number) => repository.store.readSurah(number) != null;
+
+  File? audioFile(int number) {
+    final path = repository.store.preferences.getString('audio_path_$number');
+    if (path == null) return null;
+    final file = File(path);
+    return file.existsSync() ? file : null;
+  }
+
+  bool hasAudio(int number) => audioFile(number) != null;
+
+  Future<void> downloadSurah(Surah surah) async {
+    await _enqueue(
+      type: 'quran',
+      number: surah.number,
+      url: '$apiBaseUrl/quran/surah?surah=${surah.number}',
+      filename: 'surah_${surah.number}.json',
+      directory: 'quranx/quran',
+      displayName: 'Quran ${surah.nameLatin}',
+    );
+  }
+
+  Future<void> downloadAudio(Surah surah) async {
+    final url = surah.fullAudioUrl;
+    final uri = url == null ? null : Uri.tryParse(url);
+    if (uri == null || uri.scheme != 'https') {
+      throw const FormatException(
+        'URL audio surah tidak tersedia atau tidak aman',
+      );
+    }
+    await _enqueue(
+      type: 'audio',
+      number: surah.number,
+      url: url!,
+      filename: 'surah_${surah.number}.mp3',
+      directory: 'quranx/audio',
+      displayName: 'Audio ${surah.nameLatin}',
+    );
+  }
+
+  Future<void> _enqueue({
+    required String type,
+    required int number,
+    required String url,
+    required String filename,
+    required String directory,
+    required String displayName,
+  }) async {
+    await _ensureInitialized();
+    await _requestNotificationPermission();
+    final key = _key(type, number);
+    errors.remove(key);
+    progress[key] = 0;
+    final task = DownloadTask(
+      taskId: 'quranx-$type-$number-${DateTime.now().microsecondsSinceEpoch}',
+      url: url,
+      filename: filename,
+      directory: directory,
+      baseDirectory: BaseDirectory.applicationSupport,
+      group: 'quranx-$type',
+      updates: Updates.statusAndProgress,
+      retries: 5,
+      allowPause: true,
+      priority: 5,
+      displayName: displayName,
+      metaData: '$type:$number',
+    );
+    _tasks[task.taskId] = task;
+    _taskIds[key] = task.taskId;
+    notifyListeners();
+    final enqueued = await downloader.enqueue(task);
+    if (!enqueued) {
+      progress.remove(key);
+      errors[key] = 'Task unduhan tidak dapat dimasukkan ke antrean.';
+      notifyListeners();
+      throw const FileSystemException('Task unduhan gagal masuk antrean');
+    }
+  }
+
+  Future<void> _handleUpdate(TaskUpdate update) async {
+    final task = update.task;
+    final parts = task.metaData.split(':');
+    if (parts.length != 2) return;
+    final type = parts[0];
+    final number = int.tryParse(parts[1]);
+    if (number == null) return;
+    final key = _key(type, number);
+    if (update is TaskProgressUpdate) {
+      progress[key] = update.progress.clamp(0.0, 1.0);
+      notifyListeners();
+      return;
+    }
+    if (update is! TaskStatusUpdate) return;
+    switch (update.status) {
+      case TaskStatus.complete:
+        await _finalizeCompleted(task, type, number, key);
+      case TaskStatus.failed:
+      case TaskStatus.notFound:
+        progress.remove(key);
+        errors[key] = DiagnosticLog.record(
+          update.exception ?? 'Download task failed',
+          StackTrace.current,
+          context: 'background.download.$type.$number',
+        );
+        notifyListeners();
+      case TaskStatus.canceled:
+        progress.remove(key);
+        errors[key] = 'Unduhan dibatalkan.';
+        notifyListeners();
+      case TaskStatus.paused:
+      case TaskStatus.waitingToRetry:
+      case TaskStatus.enqueued:
+      case TaskStatus.running:
+        notifyListeners();
+    }
+  }
+
+  Future<void> _finalizeCompleted(
+    Task task,
+    String type,
+    int number,
+    String key,
+  ) async {
+    try {
+      final path = await task.filePath();
+      final file = File(path);
+      if (!await file.exists()) {
+        throw const FileSystemException('File hasil unduhan tidak ditemukan');
+      }
+      if (type == 'quran') {
+        final raw =
+            jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        final body = Map<String, dynamic>.from(raw);
+        if (body['success'] != true || body['data'] is! Map) {
+          throw const FormatException(
+            'Respons Quran hasil unduhan tidak valid',
+          );
+        }
+        final surah = Surah.fromJson(
+          Map<String, dynamic>.from(body['data'] as Map),
+        );
+        if (surah.number != number) {
+          throw const FormatException('Nomor surah hasil unduhan tidak sesuai');
+        }
+        await repository.store.saveSurah(surah);
+      } else {
+        if (await file.length() < 1024) {
+          throw const FileSystemException(
+            'File audio terlalu kecil atau rusak',
+          );
+        }
+        await repository.store.preferences.setString(
+          'audio_path_$number',
+          path,
+        );
+      }
+      progress[key] = 1;
+      errors.remove(key);
+      notifyListeners();
+    } catch (error, stack) {
+      progress.remove(key);
+      errors[key] = DiagnosticLog.record(
+        error,
+        stack,
+        context: 'background.finalize.$type.$number',
+      );
+      try {
+        final path = await task.filePath();
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+      notifyListeners();
+    }
+  }
+
+  Future<void> cancel(int number, {required bool audio}) async {
+    await _ensureInitialized();
+    final key = _key(audio ? 'audio' : 'quran', number);
+    final taskId = _taskIds[key];
+    if (taskId == null) return;
+    await downloader.cancelTaskWithId(taskId);
+    _taskIds.remove(key);
+  }
+
+  Future<void> removeSurah(int number) async {
+    await repository.store.deleteSurah(number);
+    final root = await getApplicationSupportDirectory();
+    final file = File('${root.path}/quranx/quran/surah_$number.json');
+    if (await file.exists()) await file.delete();
+    notifyListeners();
+  }
+
+  Future<void> removeAudio(int number) async {
+    final file = audioFile(number);
+    if (file != null && await file.exists()) await file.delete();
+    await repository.store.preferences.remove('audio_path_$number');
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _updates?.cancel();
+    super.dispose();
+  }
+}
+
 class DownloadManager extends ChangeNotifier {
   DownloadManager(this.repository);
   final QuranRepository repository;
@@ -1097,16 +1646,18 @@ class DownloadsScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.audio,
+    required this.downloads,
   });
   final QuranRepository repository;
   final AudioController audio;
+  final BackgroundDownloadCoordinator downloads;
 
   @override
   State<DownloadsScreen> createState() => _DownloadsScreenState();
 }
 
 class _DownloadsScreenState extends State<DownloadsScreen> {
-  late final DownloadManager manager;
+  late final BackgroundDownloadCoordinator manager;
   final Set<int> selected = <int>{};
   bool loading = false;
   String? message;
@@ -1114,13 +1665,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   @override
   void initState() {
     super.initState();
-    manager = DownloadManager(widget.repository)..addListener(_refresh);
+    manager = widget.downloads..addListener(_refresh);
   }
 
   @override
   void dispose() {
     manager.removeListener(_refresh);
-    manager.dispose();
     super.dispose();
   }
 
@@ -1139,6 +1689,66 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       );
       if (mounted) setState(() => message = detail);
       return null;
+    }
+  }
+
+  Future<void> _confirmDelete(int number, {required bool audio}) async {
+    final label = audio ? 'audio' : 'data Quran';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Hapus $label?'),
+        content: Text(
+          'File $label untuk surah nomor $number akan dihapus dari penyimpanan offline.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      if (audio) {
+        await manager.removeAudio(number);
+      } else {
+        await manager.removeSurah(number);
+      }
+      if (mounted) {
+        setState(() => message = '$label surah $number berhasil dihapus.');
+      }
+    } catch (error, stack) {
+      if (mounted) {
+        setState(
+          () => message = DiagnosticLog.record(
+            error,
+            stack,
+            context: 'downloads.delete.${audio ? 'audio' : 'quran'}.$number',
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _cancel(int number, {required bool audio}) async {
+    try {
+      await manager.cancel(number, audio: audio);
+    } catch (error, stack) {
+      if (mounted) {
+        setState(
+          () => message = DiagnosticLog.record(
+            error,
+            stack,
+            context: 'downloads.cancel.${audio ? 'audio' : 'quran'}.$number',
+          ),
+        );
+      }
     }
   }
 
@@ -1237,6 +1847,10 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               final summary = surahCatalog[index];
               final quranReady = manager.hasSurah(summary.number);
               final audioReady = manager.hasAudio(summary.number);
+              final quranProgress = manager.progress['quran:${summary.number}'];
+              final audioProgress = manager.progress['audio:${summary.number}'];
+              final quranRunning = quranProgress != null && quranProgress < 1;
+              final audioRunning = audioProgress != null && audioProgress < 1;
               return CheckboxListTile(
                 value: selected.contains(summary.number),
                 onChanged: (value) => setState(() {
@@ -1245,13 +1859,70 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       : selected.remove(summary.number);
                 }),
                 title: Text('${summary.number}. ${summary.name}'),
-                subtitle: Text(
-                  '${quranReady ? 'Quran tersedia' : 'Quran belum diunduh'} • ${audioReady ? 'audio tersedia' : 'audio belum diunduh'}',
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${quranReady ? 'Quran tersedia' : 'Quran belum diunduh'} • ${audioReady ? 'audio tersedia' : 'audio belum diunduh'}',
+                    ),
+                    if (quranRunning) ...[
+                      const SizedBox(height: 4),
+                      LinearProgressIndicator(value: quranProgress),
+                      Text('Quran ${(quranProgress * 100).round()}%'),
+                    ],
+                    if (audioRunning) ...[
+                      const SizedBox(height: 4),
+                      LinearProgressIndicator(value: audioProgress),
+                      Text('Audio ${(audioProgress * 100).round()}%'),
+                    ],
+                  ],
                 ),
-                secondary: Icon(
-                  quranReady && audioReady
-                      ? Icons.download_done
-                      : Icons.cloud_download_outlined,
+                secondary: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      quranReady && audioReady
+                          ? Icons.download_done
+                          : Icons.cloud_download_outlined,
+                    ),
+                    PopupMenuButton<String>(
+                      tooltip: 'Kelola unduhan',
+                      onSelected: (action) {
+                        switch (action) {
+                          case 'delete_quran':
+                            _confirmDelete(summary.number, audio: false);
+                          case 'delete_audio':
+                            _confirmDelete(summary.number, audio: true);
+                          case 'cancel_quran':
+                            _cancel(summary.number, audio: false);
+                          case 'cancel_audio':
+                            _cancel(summary.number, audio: true);
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        if (quranReady)
+                          const PopupMenuItem(
+                            value: 'delete_quran',
+                            child: Text('Hapus Quran'),
+                          ),
+                        if (audioReady)
+                          const PopupMenuItem(
+                            value: 'delete_audio',
+                            child: Text('Hapus audio'),
+                          ),
+                        if (quranRunning)
+                          const PopupMenuItem(
+                            value: 'cancel_quran',
+                            child: Text('Batalkan unduh Quran'),
+                          ),
+                        if (audioRunning)
+                          const PopupMenuItem(
+                            value: 'cancel_audio',
+                            child: Text('Batalkan unduh audio'),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               );
             },
@@ -1312,15 +1983,20 @@ bool _inJuzRange(int surah, int ayah, JuzRange range) {
 }
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key, required this.repository});
+  const SearchScreen({super.key, required this.repository, this.network});
   final QuranRepository repository;
+  final NetworkMonitor? network;
   @override
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
 class _SearchScreenState extends State<SearchScreen> {
   final controller = TextEditingController();
+
+  bool get networkIsAvailable => widget.network?.online ?? true;
   late final AudioController audio;
+  Timer? _debounce;
+  int _queryGeneration = 0;
   String mode = 'surah';
   List<Map<String, dynamic>> results = <Map<String, dynamic>>[];
   String? error;
@@ -1334,17 +2010,21 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     controller.dispose();
     audio.dispose();
     super.dispose();
   }
 
-  Future<void> _search() async {
-    final query = controller.text.trim();
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    final generation = ++_queryGeneration;
+    final query = value.trim();
     if (query.isEmpty) {
       setState(() {
-        results = [];
-        error = 'Masukkan nama/nomor surah atau nomor Juz.';
+        results = <Map<String, dynamic>>[];
+        error = null;
+        loading = false;
       });
       return;
     }
@@ -1352,26 +2032,60 @@ class _SearchScreenState extends State<SearchScreen> {
       loading = true;
       error = null;
     });
+    _debounce = Timer(const Duration(milliseconds: 280), () {
+      _search(query: query, generation: generation);
+    });
+  }
+
+  Future<void> _search({String? query, int? generation}) async {
+    final normalized = (query ?? controller.text).trim();
+    final requestGeneration = generation ?? ++_queryGeneration;
+    if (normalized.isEmpty) {
+      if (!mounted || requestGeneration != _queryGeneration) return;
+      setState(() {
+        results = <Map<String, dynamic>>[];
+        error = null;
+        loading = false;
+      });
+      return;
+    }
+    if (mounted && requestGeneration == _queryGeneration) {
+      setState(() {
+        loading = true;
+        error = null;
+      });
+    }
     try {
+      var nextResults = <Map<String, dynamic>>[];
+      String? nextError;
       if (mode == 'juz') {
-        final juz = int.tryParse(query);
+        final juz = int.tryParse(normalized);
         if (juz == null || juz < 1 || juz > 30) {
           throw const FormatException('Nomor Juz harus 1 sampai 30.');
         }
-        results = widget.repository.searchJuz(juz);
-        if (results.isEmpty) {
-          error = 'Metadata Juz belum tersedia pada data yang tersimpan. Unduh surah dari sumber yang menyertakan field Juz terlebih dahulu.';
+        nextResults = widget.repository.searchJuz(juz);
+        if (nextResults.isEmpty) {
+          nextError = 'Metadata Juz belum tersedia pada data yang tersimpan.';
         }
       } else {
-        results = widget.repository.searchSurah(query);
-        if (results.isEmpty) {
-          error = 'Surah tidak ditemukan di katalog.';
+        nextResults = widget.repository.searchSurah(normalized);
+        if (nextResults.isEmpty && networkIsAvailable) {
+          nextResults = await widget.repository.api.search(normalized);
         }
+        if (nextResults.isEmpty) nextError = 'Surah tidak ditemukan.';
       }
+      if (!mounted || requestGeneration != _queryGeneration) return;
+      setState(() {
+        results = nextResults;
+        error = nextError;
+        loading = false;
+      });
     } catch (value, stack) {
-      error = DiagnosticLog.record(value, stack, context: 'search.$mode');
-    } finally {
-      if (mounted) setState(() => loading = false);
+      if (!mounted || requestGeneration != _queryGeneration) return;
+      setState(() {
+        error = DiagnosticLog.record(value, stack, context: 'search.$mode');
+        loading = false;
+      });
     }
   }
 
@@ -1396,16 +2110,20 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
             ],
             selected: {mode},
-            onSelectionChanged: (value) => setState(() {
-              mode = value.first;
-              results = [];
-              error = null;
-            }),
+            onSelectionChanged: (value) {
+              setState(() {
+                mode = value.first;
+                results = <Map<String, dynamic>>[];
+                error = null;
+              });
+              _onQueryChanged(controller.text);
+            },
           ),
           const SizedBox(height: 12),
           TextField(
             controller: controller,
             textInputAction: TextInputAction.search,
+            onChanged: _onQueryChanged,
             onSubmitted: (_) => _search(),
             decoration: InputDecoration(
               labelText: mode == 'juz'
@@ -1461,6 +2179,261 @@ class _SearchScreenState extends State<SearchScreen> {
   );
 }
 
+class PrayerSettingsScreen extends StatefulWidget {
+  const PrayerSettingsScreen({super.key, required this.repository});
+
+  final QuranRepository repository;
+
+  @override
+  State<PrayerSettingsScreen> createState() => _PrayerSettingsScreenState();
+}
+
+class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
+  final cityController = TextEditingController();
+  final api = PrayerApiClient();
+  late final PrayerReminderService reminders;
+  Timer? _debounce;
+  int _generation = 0;
+  List<PrayerCity> cities = <PrayerCity>[];
+  PrayerCity? selectedCity;
+  PrayerSchedule? schedule;
+  String? error;
+  bool loading = false;
+  bool scheduling = false;
+
+  @override
+  void initState() {
+    super.initState();
+    reminders = PrayerReminderService(widget.repository.store.preferences);
+    reminders.initialize();
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    cityController.dispose();
+    api.dispose();
+    super.dispose();
+  }
+
+  void _onCityChanged(String value) {
+    _debounce?.cancel();
+    final generation = ++_generation;
+    final query = value.trim();
+    if (query.isEmpty) {
+      setState(() {
+        cities = <PrayerCity>[];
+        error = null;
+        loading = false;
+      });
+      return;
+    }
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    _debounce = Timer(const Duration(milliseconds: 300), () async {
+      try {
+        final results = await api.searchCities(query);
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          cities = results;
+          loading = false;
+          error = results.isEmpty ? 'Wilayah tidak ditemukan.' : null;
+        });
+      } catch (value, stack) {
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          loading = false;
+          error = DiagnosticLog.record(value, stack, context: 'prayer.cities');
+        });
+      }
+    });
+  }
+
+  Future<void> _selectCity(PrayerCity city) async {
+    final cityId = int.tryParse(city.id);
+    if (cityId == null) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      selectedCity = city;
+      cities = <PrayerCity>[];
+      loading = true;
+      error = null;
+      schedule = null;
+    });
+    try {
+      final loaded = await api.fetchSchedule(cityId, DateTime.now());
+      if (!mounted) return;
+      setState(() {
+        schedule = loaded;
+        loading = false;
+      });
+    } catch (value, stack) {
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        error = DiagnosticLog.record(
+          value,
+          stack,
+          context: 'prayer.schedule.$cityId',
+        );
+      });
+    }
+  }
+
+  Future<void> _scheduleReminders() async {
+    final value = schedule;
+    if (value == null) return;
+    setState(() => scheduling = true);
+    try {
+      await reminders.scheduleSevenDays(api, value.cityId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Notifikasi Subuh, Dzuhur, Ashar, Maghrib, dan Isya dijadwalkan.',
+            ),
+          ),
+        );
+      }
+    } catch (value, stack) {
+      if (mounted) {
+        setState(
+          () => error = DiagnosticLog.record(
+            value,
+            stack,
+            context: 'prayer.schedule_notifications',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => scheduling = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Jadwal Sholat')),
+    body: ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          'Cari kota atau kabupaten dari data live Kemenag RI pada API QuranX.',
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: cityController,
+          onChanged: _onCityChanged,
+          decoration: InputDecoration(
+            labelText: 'Kota / kabupaten',
+            hintText: 'Contoh: Bandung',
+            prefixIcon: const Icon(Icons.location_city),
+            suffixIcon: loading
+                ? const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.search),
+          ),
+        ),
+        if (cities.isNotEmpty)
+          Card(
+            child: Column(
+              children: cities
+                  .map(
+                    (city) => ListTile(
+                      title: Text(city.name),
+                      subtitle: Text('ID wilayah: ${city.id}'),
+                      onTap: () => _selectCity(city),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(
+              error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        if (selectedCity != null) ...[
+          const SizedBox(height: 20),
+          Text(
+            selectedCity!.name,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          if (schedule != null) ...[
+            Text(
+              '${schedule!.regionName} • ${schedule!.date.toIso8601String().substring(0, 10)}',
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Column(
+                children: const [
+                  'subuh',
+                  'dzuhur',
+                  'ashar',
+                  'maghrib',
+                  'isya',
+                ].map((name) => _PrayerTimeRow(name: name)).toList(),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: scheduling ? null : _scheduleReminders,
+              icon: const Icon(Icons.notifications_active_outlined),
+              label: Text(
+                scheduling ? 'Menjadwalkan…' : 'Aktifkan notifikasi sholat',
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Suara adzan pilihan belum ditampilkan karena API yang sama belum menyediakan katalog audio adzan terverifikasi.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ],
+        ],
+      ],
+    ),
+  );
+}
+
+class _PrayerTimeRow extends StatelessWidget {
+  const _PrayerTimeRow({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_PrayerSettingsScreenState>();
+    final time = state?.schedule?.times[name] ?? '--:--';
+    return ListTile(
+      leading: const Icon(Icons.access_time),
+      title: Text(PrayerReminderService._displayName(name)),
+      trailing: Text(time, style: Theme.of(context).textTheme.titleMedium),
+    );
+  }
+}
+
+Color _tajwidColor(int index, ColorScheme colors) {
+  const palette = <Color>[
+    Color(0xff0f766e),
+    Color(0xff2563eb),
+    Color(0xffb45309),
+    Color(0xffbe123c),
+    Color(0xff7c3aed),
+    Color(0xff15803d),
+  ];
+  final base = palette[index % palette.length];
+  return Color.lerp(
+    base,
+    colors.surface,
+    colors.brightness == Brightness.dark ? 0.15 : 0.0,
+  )!;
+}
+
 class TajwidPanel extends StatefulWidget {
   const TajwidPanel({super.key, required this.text});
   final String text;
@@ -1494,20 +2467,44 @@ class _TajwidPanelState extends State<TajwidPanel> {
         );
       }
       final data = snapshot.data!;
+      final colors = Theme.of(context).colorScheme;
       return Card(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        color: colors.surfaceContainerHighest,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Tajwid Mode',
+                'Tajwid Mode berwarna',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
               Text('API mendeteksi ${data.totalRules} kelompok aturan.'),
-              ...data.rules.map((rule) => Text('• $rule')),
-              if (data.guidance.isNotEmpty) Text(data.guidance),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (var index = 0; index < data.rules.length; index++)
+                    Chip(
+                      avatar: CircleAvatar(
+                        backgroundColor: _tajwidColor(index, colors),
+                        radius: 7,
+                      ),
+                      label: Text(data.rules[index]),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Warna menandai kelompok aturan yang dikembalikan API. '
+                'API saat ini belum memberikan rentang karakter untuk mewarnai setiap huruf Arab.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (data.guidance.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(data.guidance),
+              ],
             ],
           ),
         ),

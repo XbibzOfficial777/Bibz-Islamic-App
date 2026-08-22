@@ -86,6 +86,58 @@ void main() {
     expect(repository.searchJuz(2), isEmpty);
   });
 
+  test('prayer schedule validates live city and requested date', () {
+    final schedule = PrayerSchedule.fromApi(
+      {
+        'success': true,
+        'data': {
+          'isLiveDataFromInternet': true,
+          'source': 'Kementerian Agama Republik Indonesia (Kemenag RI)',
+          'cityInfo': {
+            'id': 1219,
+            'lokasi': 'KOTA BANDUNG',
+            'daerah': 'JAWA BARAT',
+          },
+          'schedule': {
+            'date': '2026-08-24',
+            'tanggal': 'Senin, 24/08/2026',
+            'imsak': '04:28',
+            'subuh': '04:38',
+            'terbit': '05:47',
+            'dhuha': '06:19',
+            'dzuhur': '11:56',
+            'ashar': '15:15',
+            'maghrib': '17:57',
+            'isya': '19:03',
+          },
+        },
+      },
+      requestedCityId: 1219,
+      requestedDate: DateTime(2026, 8, 24),
+    );
+    expect(schedule.cityName, 'KOTA BANDUNG');
+    expect(schedule.times['ashar'], '15:15');
+  });
+
+  test('prayer schedule rejects an astronomical fallback response', () {
+    expect(
+      () => PrayerSchedule.fromApi(
+        {
+          'success': true,
+          'data': {
+            'isLiveDataFromInternet': false,
+            'astronomicalData': {
+              'times': {'fajr': '21.39.00'},
+            },
+          },
+        },
+        requestedCityId: 1219,
+        requestedDate: DateTime(2026, 8, 24),
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('diagnostic log keeps a full copyable stack trace', () async {
     SharedPreferences.setMockInitialValues({});
     final preferences = await SharedPreferences.getInstance();

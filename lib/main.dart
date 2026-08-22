@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 
+import 'package:background_downloader/background_downloader.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
@@ -10,6 +11,9 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
 import 'package:url_launcher/url_launcher.dart';
 
 part 'production_features.dart';
@@ -209,6 +213,10 @@ class LocalStore {
       preferences.remove('surah_$number');
       return null;
     }
+  }
+
+  Future<void> deleteSurah(int number) async {
+    await preferences.remove('surah_$number');
   }
 
   Set<String> bookmarks() =>
@@ -455,19 +463,19 @@ Future<void> main() async {
   };
   final preferences = await SharedPreferences.getInstance();
   await DiagnosticLog.initialize(preferences);
+  final repository = QuranRepository(QuranApiClient(), LocalStore(preferences));
+  final downloads = BackgroundDownloadCoordinator(repository);
+  await downloads.initialize();
   runZonedGuarded(
-    () => runApp(
-      BibzApp(
-        repository: QuranRepository(QuranApiClient(), LocalStore(preferences)),
-      ),
-    ),
+    () => runApp(BibzApp(repository: repository, downloads: downloads)),
     (error, stack) => DiagnosticLog.record(error, stack, context: 'dart.zone'),
   );
 }
 
 class BibzApp extends StatefulWidget {
-  const BibzApp({super.key, required this.repository});
+  const BibzApp({super.key, required this.repository, this.downloads});
   final QuranRepository repository;
+  final BackgroundDownloadCoordinator? downloads;
 
   @override
   State<BibzApp> createState() => _BibzAppState();
@@ -477,6 +485,8 @@ class _BibzAppState extends State<BibzApp> {
   late QuranXAppearance appearance;
   late final AudioController audio;
   late final NetworkMonitor network;
+  late final BackgroundDownloadCoordinator downloads;
+  late final bool ownsDownloads;
 
   @override
   void initState() {
@@ -484,12 +494,16 @@ class _BibzAppState extends State<BibzApp> {
     appearance = widget.repository.store.appearance();
     audio = AudioController();
     network = NetworkMonitor();
+    ownsDownloads = widget.downloads == null;
+    downloads =
+        widget.downloads ?? BackgroundDownloadCoordinator(widget.repository);
   }
 
   @override
   void dispose() {
     audio.dispose();
     network.dispose();
+    if (ownsDownloads) downloads.dispose();
     super.dispose();
   }
 
@@ -528,6 +542,7 @@ class _BibzAppState extends State<BibzApp> {
       onAppearanceChanged: setAppearance,
       audio: audio,
       network: network,
+      downloads: downloads,
     ),
   );
 }
@@ -540,12 +555,14 @@ class HomeScreen extends StatefulWidget {
     required this.onAppearanceChanged,
     required this.audio,
     required this.network,
+    required this.downloads,
   });
   final QuranRepository repository;
   final QuranXAppearance appearance;
   final Future<void> Function(QuranXAppearance) onAppearanceChanged;
   final AudioController audio;
   final NetworkMonitor network;
+  final BackgroundDownloadCoordinator downloads;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -625,7 +642,10 @@ class _HomeScreenState extends State<HomeScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => SearchScreen(repository: widget.repository),
+                  builder: (_) => SearchScreen(
+                    repository: widget.repository,
+                    network: widget.network,
+                  ),
                 ),
               );
             },
@@ -641,7 +661,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (_) => DownloadsScreen(
                     repository: widget.repository,
                     audio: widget.audio,
+                    downloads: widget.downloads,
                   ),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.notifications_active_outlined),
+            title: const Text('Jadwal Sholat & Pengingat'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      PrayerSettingsScreen(repository: widget.repository),
                 ),
               );
             },
@@ -686,7 +721,10 @@ class _HomeScreenState extends State<HomeScreen> {
           onPressed: () => Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => SearchScreen(repository: widget.repository),
+              builder: (_) => SearchScreen(
+                repository: widget.repository,
+                network: widget.network,
+              ),
             ),
           ),
           icon: const Icon(Icons.search),
@@ -936,6 +974,7 @@ class _HomeScreenState extends State<HomeScreen> {
               builder: (_) => DownloadsScreen(
                 repository: widget.repository,
                 audio: widget.audio,
+                downloads: widget.downloads,
               ),
             ),
           ),
