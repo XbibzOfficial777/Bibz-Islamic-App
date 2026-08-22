@@ -15,7 +15,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "quranx/diagnostics"
         private const val DIRECTORY_NAME = "QuranX/Logs"
-        private const val MEDIA_RELATIVE_PATH = "${Environment.DIRECTORY_DOWNLOADS}/$DIRECTORY_NAME/"
+        private val MEDIA_RELATIVE_PATH = "${Environment.DIRECTORY_DOWNLOADS}/$DIRECTORY_NAME/"
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
