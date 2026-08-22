@@ -19,6 +19,7 @@ dependencies:
   device_info_plus: ^13.2.0
   crypto: ^3.0.7
   url_launcher: ^6.3.2
+  url_launcher_android: 6.3.31
 
 dev_dependencies:
   flutter_test:
