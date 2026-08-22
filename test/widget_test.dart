@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:bibz/main.dart';
+import 'package:quranx/main.dart';
 
 void main() {
   test('Quran validator accepts ordered complete ayahs', () {
@@ -34,7 +34,7 @@ void main() {
     expect(() => QuranValidator.validate(1, 2, ayahs), throwsFormatException);
   });
 
-  testWidgets('Bibz home displays the Quran navigation', (
+  testWidgets('QuranX home displays the Quran navigation', (
     WidgetTester tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -44,7 +44,7 @@ void main() {
       LocalStore(preferences),
     );
     await tester.pumpWidget(BibzApp(repository: repository));
-    expect(find.text('Bibz Islamic'), findsOneWidget);
+    expect(find.text('QuranX'), findsOneWidget);
     expect(find.text('Surah pilihan'), findsOneWidget);
     expect(find.text('Quran'), findsOneWidget);
   });

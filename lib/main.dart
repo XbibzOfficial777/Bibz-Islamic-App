@@ -175,6 +175,8 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+enum AppThemePreference { system, light, dark }
+
 class LocalStore {
   LocalStore(this.preferences);
   final SharedPreferences preferences;
@@ -214,6 +216,21 @@ class LocalStore {
       'last_read',
       jsonEncode({'surah': surah, 'ayah': ayah}),
     );
+  }
+
+  AppThemePreference themePreference() {
+    switch (preferences.getString('theme_preference')) {
+      case 'light':
+        return AppThemePreference.light;
+      case 'dark':
+        return AppThemePreference.dark;
+      default:
+        return AppThemePreference.system;
+    }
+  }
+
+  Future<void> setThemePreference(AppThemePreference preference) async {
+    await preferences.setString('theme_preference', preference.name);
   }
 }
 
@@ -382,25 +399,74 @@ Future<void> main() async {
   );
 }
 
-class BibzApp extends StatelessWidget {
+class BibzApp extends StatefulWidget {
   const BibzApp({super.key, required this.repository});
   final QuranRepository repository;
 
   @override
+  State<BibzApp> createState() => _BibzAppState();
+}
+
+class _BibzAppState extends State<BibzApp> {
+  late AppThemePreference preference;
+
+  @override
+  void initState() {
+    super.initState();
+    preference = widget.repository.store.themePreference();
+  }
+
+  ThemeMode get themeMode {
+    switch (preference) {
+      case AppThemePreference.light:
+        return ThemeMode.light;
+      case AppThemePreference.dark:
+        return ThemeMode.dark;
+      case AppThemePreference.system:
+        return ThemeMode.system;
+    }
+  }
+
+  Future<void> setThemePreference(AppThemePreference value) async {
+    await widget.repository.store.setThemePreference(value);
+    if (mounted) setState(() => preference = value);
+  }
+
+  @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Bibz Islamic',
+    title: 'QuranX',
     debugShowCheckedModeBanner: false,
+    themeMode: themeMode,
     theme: ThemeData(
       colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff0e6b55)),
       useMaterial3: true,
     ),
-    home: HomeScreen(repository: repository),
+    darkTheme: ThemeData(
+      brightness: Brightness.dark,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xff69d3af),
+        brightness: Brightness.dark,
+      ),
+      useMaterial3: true,
+    ),
+    home: HomeScreen(
+      repository: widget.repository,
+      themePreference: preference,
+      onThemePreferenceChanged: setThemePreference,
+    ),
   );
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.repository});
+  const HomeScreen({
+    super.key,
+    required this.repository,
+    required this.themePreference,
+    required this.onThemePreferenceChanged,
+  });
   final QuranRepository repository;
+  final AppThemePreference themePreference;
+  final Future<void> Function(AppThemePreference) onThemePreferenceChanged;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -445,7 +511,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: const Text(
-        'Bibz Islamic',
+        'QuranX',
         style: TextStyle(fontWeight: FontWeight.w700),
       ),
       actions: [
@@ -660,6 +726,34 @@ class _HomeScreenState extends State<HomeScreen> {
       const SizedBox(height: 16),
       Card(
         child: ListTile(
+          leading: const Icon(Icons.palette_outlined),
+          title: const Text('Tema aplikasi'),
+          subtitle: Text(_themeLabel(widget.themePreference)),
+          trailing: DropdownButton<AppThemePreference>(
+            value: widget.themePreference,
+            underline: const SizedBox.shrink(),
+            onChanged: (value) {
+              if (value != null) widget.onThemePreferenceChanged(value);
+            },
+            items: const [
+              DropdownMenuItem(
+                value: AppThemePreference.system,
+                child: Text('Sistem'),
+              ),
+              DropdownMenuItem(
+                value: AppThemePreference.light,
+                child: Text('Light'),
+              ),
+              DropdownMenuItem(
+                value: AppThemePreference.dark,
+                child: Text('Dark'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      Card(
+        child: ListTile(
           leading: const Icon(Icons.offline_bolt),
           title: const Text('Offline-first'),
           subtitle: const Text(
@@ -685,6 +779,17 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     ],
   );
+
+  String _themeLabel(AppThemePreference value) {
+    switch (value) {
+      case AppThemePreference.system:
+        return 'Mengikuti pengaturan sistem';
+      case AppThemePreference.light:
+        return 'Mode terang';
+      case AppThemePreference.dark:
+        return 'Mode gelap';
+    }
+  }
 
   Future<void> _openSurah(BuildContext context, int number, int ayah) async {
     await Navigator.of(context).push(

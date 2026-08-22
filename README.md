@@ -1,12 +1,12 @@
-# Bibz Islamic App
+# QuranX
 
-**Bibz Islamic** is an offline-first Quran application built with Flutter. The Android package identifier is `com.all.bibz`. The app reads locally cached, validated surah datasets first and only contacts the Bibz Islamic API when the requested surah is not available locally.
+**QuranX** is an offline-first Quran application built with Flutter. The Android package identifier remains `com.all.bibz` so existing installations can receive updates, while the installable app label and release APK filenames are **QuranX**. The app reads locally cached, validated surah datasets first and contacts the Bibz Islamic API only when the requested surah is not available locally.
 
-> **Current baseline:** this repository contains the first buildable application foundation: 114-surah catalog, verified surah API integration, Quran integrity validation, local persistence for opened surahs/bookmarks/last-read state, reader UI, Arabic/transliteration/Indonesian translation display, local-first search with online fallback, copy, and bookmark flows.
+> **Current baseline:** the repository contains a buildable application foundation with a 114-surah catalog, verified surah API integration, Quran integrity validation, local persistence for opened surahs/bookmarks/last-read state, reader UI, Arabic/transliteration/Indonesian translation display, local-first search with online fallback, copy, bookmark, and persisted Light/Dark/System theme selection.
 
 ## Repository and release links
 
-The public repository is [XbibzOfficial777/Bibz-Islamic-App](https://github.com/XbibzOfficial777/Bibz-Islamic-App). GitHub normalizes repository names to URL-safe slugs, so the repository slug is `Bibz-Islamic-App` while the application/repository display name is **Bibz Islamic App**.
+The public repository is [XbibzOfficial777/Bibz-Islamic-App](https://github.com/XbibzOfficial777/Bibz-Islamic-App). GitHub normalizes repository names to URL-safe slugs, so the repository slug is `Bibz-Islamic-App` while the app label is **QuranX**.
 
 ## Toolchain
 
@@ -22,7 +22,7 @@ The build is pinned to the following stable and mutually compatible versions:
 | Android Build Tools | 36.0.0 | Official AGP 9.3 default. |
 | Release runner | `ubuntu-24.04` | Reproducible GitHub-hosted Linux runner. |
 
-The workflow uses `subosito/flutter-action@v2`, `actions/checkout@v5`, `actions/setup-java@v5`, `actions/upload-artifact@v4`, `actions/download-artifact@v8`, and `softprops/action-gh-release@v3`.
+The workflow uses `subosito/flutter-action@v2`, `actions/checkout@v5`, `actions/setup-java@v5`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, and `softprops/action-gh-release@v3`.
 
 ## Local development
 
@@ -44,26 +44,55 @@ Surah: GET /quran/surah?surah=<1..114>
 Search: GET /quran/search?q=<query>
 ```
 
-The client validates the response envelope, surah number, expected ayah count, ayah ordering, duplicate-free sequence, Arabic text, and Indonesian translation before caching. API descriptions are sanitized before display because the observed API response contains HTML tags.
+The Android manifest explicitly includes `android.permission.INTERNET`, which is required for the released app to reach the HTTPS API. The client validates the response envelope, surah number, expected ayah count, ayah ordering, duplicate-free sequence, Arabic text, and Indonesian translation before caching. API descriptions are sanitized before display because the observed API response contains HTML tags.
 
-## GitHub Actions
+## Theme selection
 
-The workflow at `.github/workflows/android-release.yml` runs on pull requests, pushes to `main`, version tags matching `v*`, and manual dispatch. It first runs formatting, static analysis, and tests. A successful build then creates four APK assets:
+The Settings screen provides three choices: **Sistem**, which follows the device preference; **Light**, which always uses the light palette; and **Dark**, which always uses the dark palette. The selection is persisted locally using `SharedPreferences` and is applied through Flutter’s root `ThemeMode`.
+
+## GitHub Actions and release APKs
+
+The workflow at `.github/workflows/android-release.yml` runs on pull requests, pushes to `main`, version tags matching `v*`, and manual dispatch. It first runs formatting, static analysis, and tests. A successful release build creates four QuranX APK assets:
 
 | Asset | Intended devices |
 |---|---|
-| `bibz-islamic-armv7-release.apk` | 32-bit ARM devices (`armeabi-v7a`) |
-| `bibz-islamic-arm64-release.apk` | 64-bit ARM devices (`arm64-v8a`) |
-| `bibz-islamic-x86_64-release.apk` | x86_64 Android devices/emulators |
-| `bibz-islamic-universal-release.apk` | Universal APK containing all supported ABIs |
+| `quranx-armv7-release.apk` | 32-bit ARM devices (`armeabi-v7a`) |
+| `quranx-arm64-release.apk` | 64-bit ARM devices (`arm64-v8a`) |
+| `quranx-x86_64-release.apk` | x86_64 Android devices/emulators |
+| `quranx-universal-release.apk` | Universal APK containing all supported ABIs |
 
-The workflow also creates `SHA256SUMS.txt`. All files are uploaded as an immutable workflow artifact on every successful main/tag build. A GitHub Release is published automatically only when a version tag is pushed.
+Each APK is explicitly signed with **APK Signature Scheme V2, V3, and V4** using `apksigner`. V4 additionally produces a companion `.idsig` file. The workflow verifies every signed APK and includes the four `.idsig` files plus `SHA256SUMS.txt` in the workflow artifact and GitHub Release.
 
-To publish a release:
+### Required encrypted repository secrets
+
+The private keystore must never be committed. The release workflow expects these encrypted GitHub Actions secrets:
+
+| Secret | Value |
+|---|---|
+| `KEYSTORE_BASE64` | Base64 contents of the `.jks` file |
+| `KEYSTORE_PASSWORD` | Keystore password |
+| `KEY_PASSWORD` | Private-key password |
+| `KEY_ALIAS` | Keystore alias |
+
+The uploaded keystore was not committed to the repository. The current GitHub integration token returned HTTP 403 when attempting to write Actions secrets, so the four secrets still need to be added by an account/session with repository Actions-secret write permission. The workflow intentionally fails early when any required secret is missing rather than silently publishing debug-key APKs.
+
+For a local shell with suitable repository administration permission, the safe setup pattern is:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+REPO=XbibzOfficial777/Bibz-Islamic-App
+gh secret set KEYSTORE_BASE64 --repo "$REPO" < <(base64 -w0 path/to/xbibzofcv1.jks)
+printf '%s' '<keystore-password>' | gh secret set KEYSTORE_PASSWORD --repo "$REPO"
+printf '%s' '<private-key-password>' | gh secret set KEY_PASSWORD --repo "$REPO"
+printf '%s' '<key-alias>' | gh secret set KEY_ALIAS --repo "$REPO"
+```
+
+Do not paste passwords into shell history on a shared machine. Android’s guidance also recommends separating a Play App Signing key from an upload key when distributing through Google Play; the keystore used by this repository should be treated as sensitive signing material.[1]
+
+To publish a signed QuranX release after the secrets are present:
+
+```bash
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 The release job requires the repository’s automatic `GITHUB_TOKEN` to have `contents: write`, which is declared in the workflow. No long-lived personal token is stored in the repository.
@@ -72,14 +101,16 @@ The release job requires the repository’s automatic `GITHUB_TOKEN` to have `co
 
 The verified Bibz API currently returns a fixed Alafasy audio URL in the observed Quran response and does not expose a verified dedicated reciter endpoint. The repository therefore does not present a fake multi-Qari selector. Audio download, background playback, and reciter selection must be added only after an approved and verified audio contract is available.
 
-The full workflow specification remains in the supplied `Bibz_Islamic_Workflow.md` reference outside this repository. The implementation must continue to follow its atomic data rule: a dataset is either validated and committed or treated as unavailable; partially downloaded data must never be reported as completed.
+The implementation follows the atomic data rule: a dataset is either validated and committed or treated as unavailable; partially downloaded data must never be reported as completed.
 
 ## References
 
-1. [Flutter release notes](https://docs.flutter.dev/release/release-notes)
-2. [Flutter 3.47.0 release notes](https://docs.flutter.dev/release/release-notes/release-notes-3.47.0)
-3. [Android Gradle Plugin 9.3.0 release notes](https://developer.android.com/build/releases/agp-9-3-0-release-notes)
-4. [Flutter GitHub Action](https://github.com/subosito/flutter-action)
-5. [GitHub upload-artifact action](https://github.com/actions/upload-artifact)
-6. [GitHub download-artifact action](https://github.com/actions/download-artifact)
-7. [GitHub release action](https://github.com/softprops/action-gh-release/releases)
+1. [Sign your app | Android Developers](https://developer.android.com/studio/publish/app-signing)
+2. [apksigner | Android Developers](https://developer.android.com/tools/apksigner)
+3. [Flutter release notes](https://docs.flutter.dev/release/release-notes)
+4. [Flutter 3.47.0 release notes](https://docs.flutter.dev/release/release-notes/release-notes-3.47.0)
+5. [Android Gradle Plugin 9.3.0 release notes](https://developer.android.com/build/releases/agp-9-3-0-release-notes)
+6. [Flutter GitHub Action](https://github.com/subosito/flutter-action)
+7. [GitHub upload-artifact action](https://github.com/actions/upload-artifact)
+8. [GitHub download-artifact action](https://github.com/actions/download-artifact)
+9. [GitHub release action](https://github.com/softprops/action-gh-release/releases)
