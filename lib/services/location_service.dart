@@ -1,5 +1,51 @@
 part of '../main.dart';
 
+String _normalizePrayerLocationName(String value) {
+  final withoutPunctuation = value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+      .trim();
+  return withoutPunctuation
+      .replaceAll(
+        RegExp(
+          r'\b(kecamatan|kabupaten|kab|kota|provinsi|province|district)\b',
+        ),
+        ' ',
+      )
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+List<String> buildPrayerLocationQueries(Iterable<String?> values) {
+  final queries = <String>[];
+  for (final value in values) {
+    final original = value?.trim() ?? '';
+    if (original.isEmpty) continue;
+    if (!queries.contains(original)) queries.add(original);
+
+    final normalized = _normalizePrayerLocationName(original);
+    if (normalized.isNotEmpty && !queries.contains(normalized)) {
+      queries.add(normalized);
+    }
+  }
+  return queries;
+}
+
+PrayerCity? selectPrayerCity(String query, List<PrayerCity> cities) {
+  final normalizedQuery = _normalizePrayerLocationName(query);
+  if (normalizedQuery.isEmpty) return null;
+
+  for (final city in cities) {
+    final normalizedCity = _normalizePrayerLocationName(city.name);
+    if (normalizedCity == normalizedQuery ||
+        normalizedCity.contains(normalizedQuery) ||
+        normalizedQuery.contains(normalizedCity)) {
+      return city;
+    }
+  }
+  return null;
+}
+
 class GpsPrayerResolver {
   final Geocoding geocoder = Geocoding();
 
@@ -26,26 +72,24 @@ class GpsPrayerResolver {
       position.longitude,
     );
     final placemark = placemarks.isEmpty ? null : placemarks.first;
-    final query =
-        [
-          placemark?.locality,
-          placemark?.subAdministrativeArea,
-          placemark?.administrativeArea,
-        ].whereType<String>().firstWhere(
-          (value) => value.trim().isNotEmpty,
-          orElse: () => '',
-        );
-    if (query.isEmpty) {
+    final queries = buildPrayerLocationQueries([
+      placemark?.locality,
+      placemark?.subAdministrativeArea,
+      placemark?.administrativeArea,
+    ]);
+    if (queries.isEmpty) {
       throw StateError('Nama wilayah tidak dapat ditentukan dari GPS.');
     }
-    final cities = await api.searchCities(query);
-    if (cities.isEmpty) {
-      throw StateError('Wilayah GPS "$query" tidak ditemukan pada API QuranX.');
+
+    for (final query in queries) {
+      final cities = await api.searchCities(query);
+      final city = selectPrayerCity(query, cities);
+      if (city != null) return city;
     }
-    final normalized = query.toLowerCase();
-    return cities.firstWhere(
-      (city) => city.name.toLowerCase().contains(normalized),
-      orElse: () => cities.first,
+
+    throw StateError(
+      'Wilayah GPS tidak ditemukan pada API QuranX. '
+      'Pencarian: ${queries.join(', ')}.',
     );
   }
 }

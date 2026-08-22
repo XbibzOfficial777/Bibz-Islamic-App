@@ -86,6 +86,19 @@ void main() {
     expect(repository.searchJuz(2), isEmpty);
   });
 
+  test('GPS Tulungagung resolves through the QuranX city catalog', () {
+    const city = PrayerCity(id: '1629', name: 'KAB. TULUNGAGUNG');
+    final queries = buildPrayerLocationQueries([
+      'Kecamatan Tulungagung',
+      'Kabupaten Tulungagung',
+      'Tulungagung',
+    ]);
+
+    expect(queries, contains('Tulungagung'));
+    expect(selectPrayerCity('Tulungagung', [city]), city);
+    expect(selectPrayerCity('Kecamatan Tulungagung', [city]), city);
+  });
+
   test('prayer schedule validates live city and requested date', () {
     final schedule = PrayerSchedule.fromApi(
       {
