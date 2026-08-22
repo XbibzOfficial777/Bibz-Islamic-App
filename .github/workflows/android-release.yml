@@ -132,6 +132,13 @@ jobs:
               --v3-signing-enabled true \
               --v4-signing-enabled true \
               "$apk"
+            "$APKSIGNER" sign \
+              --ks android/upload-keystore.jks \
+              --ks-key-alias "$KEY_ALIAS" \
+              --ks-pass env:KEYSTORE_PASSWORD \
+              --key-pass env:KEY_PASSWORD \
+              --v4-signing-enabled only \
+              "$apk"
             "$APKSIGNER" verify --verbose --print-certs "$apk"
             test -s "$apk.idsig"
           done
