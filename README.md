@@ -163,3 +163,16 @@ The same API provides live city and prayer schedule routes. City search uses `GE
 The Jadwal Sholat screen can search cities in realtime, display the verified daily schedule, and schedule seven days of named notifications for Subuh, Dzuhur, Ashar, Maghrib, and Isya using timezone-aware Android local notifications. Notifications are scheduled inexactly to avoid claiming exact-alarm privileges that may not be appropriate for every distribution channel, and Android/OEM restrictions may still affect delivery.
 
 The current same API does not advertise or expose a verified adzan/muadzin audio catalog. QuranX therefore does not show fake voice choices and does not download Surah recitations as if they were adzan recordings. Selectable offline adzan voices will be added only when the API provides a real catalog and stable audio URLs, or after an explicit user-approved audio asset source is supplied.
+
+
+## Code architecture
+
+The application is intentionally split by responsibility rather than keeping all production behavior in one file. Quran entities, validation, local persistence, and the base API client live under `lib/core/quran_data.dart`. Appearance and diagnostics are isolated under `lib/core/appearance.dart` and `lib/core/diagnostics.dart`. Audio, downloads, prayer API/reminders, GPS resolution, Tajwid, and Juz catalog logic live under `lib/services/`. The app shell, reader, search, downloads, diagnostics, and prayer settings screens live under `lib/screens/`, while reusable error, appearance, and Tajwid widgets live under `lib/widgets/`. `lib/main.dart` now serves as the application library entrypoint and dependency owner.
+
+The prayer settings flow is GPS-first. QuranX requests device location, reverse-resolves the locality through the platform geocoder, searches the matching city in the existing QuranX city API, validates the returned city/date/source fields, and then fetches the schedule from the same API. It does not expose manual city typing as the primary configuration path.
+
+The supplied `adan_madinah_32_16.mp3` is bundled as `assets/audio/adhan_madinah.mp3` for Flutter access and `android/app/src/main/res/raw/adhan_madinah.mp3` for Android notification sound playback. The notification channel uses a versioned channel ID because Android notification-channel sound settings persist after channel creation.
+
+Issue #1 remains covered as a real network-stream regression: a connection that closes while Quran data is arriving must remain a retryable diagnostic error and must never be interpreted as proof that the Surah does not exist.
+
+Background behavior is implemented as resilient scheduling, not an impossible promise that a process can run forever. Android may restrict location updates, stop foreground services, enforce battery policies, or reject a service after Force Stop. QuranX therefore caches validated schedules, schedules local notifications ahead of time, refreshes after a GPS-enabled user action and eligible system events, and surfaces permission or stale-data state instead of silently claiming continuous 24-hour execution.
