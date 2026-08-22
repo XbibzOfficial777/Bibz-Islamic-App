@@ -1087,8 +1087,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
         context: 'reader.play.${widget.number}.${ayah.number}',
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Audio tidak dapat diputar: $detail')),
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Audio tidak dapat diputar'),
+            content: SizedBox(
+              width: 420,
+              height: 500,
+              child: ErrorDetailsView(
+                title: 'Audio tidak tersedia',
+                detail: detail,
+                onRetry: () => Navigator.pop(dialogContext),
+                onLogConsumed: () => DiagnosticLog.deleteForDetail(detail),
+              ),
+            ),
+          ),
         );
       }
     }
@@ -1121,6 +1134,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         body: ErrorDetailsView(
           title: 'Surah belum tersedia',
           detail: error.toString(),
+          onLogConsumed: () => DiagnosticLog.deleteForDetail(error.toString()),
           onRetry: () => setState(() {
             error = null;
             loading = true;

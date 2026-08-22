@@ -99,6 +99,10 @@ void main() {
     expect(detail, contains('context: test.diagnostics'));
     expect(detail, contains('stackTrace:'));
     expect(preferences.getStringList('diagnostic_log'), isNotEmpty);
+    expect(
+      DiagnosticLog.fileNameFor(detail),
+      matches(RegExp(r'^QuranX_Log_\d{8}_\d{6}_\d{6}\.txt$')),
+    );
   });
 
   testWidgets('error details exposes copy and report actions', (
@@ -114,6 +118,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byType(ErrorDetailsView), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -500));
+    await tester.pumpAndSettle();
+    expect(find.text('Copy Full Error Log'), findsOneWidget);
+    expect(find.text('Report Issue'), findsOneWidget);
   });
 
   testWidgets('QuranX home displays the Quran navigation', (
