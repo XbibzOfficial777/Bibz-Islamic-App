@@ -61,7 +61,7 @@ The workflow at `.github/workflows/android-release.yml` runs on pull requests, p
 | `quranx-x86_64-release.apk` | x86_64 Android devices/emulators |
 | `quranx-universal-release.apk` | Universal APK containing all supported ABIs |
 
-Each APK is explicitly signed with **APK Signature Scheme V2, V3, and V4** using `apksigner`. V4 additionally produces a companion `.idsig` file. The workflow verifies every signed APK and includes the four `.idsig` files plus `SHA256SUMS.txt` in the workflow artifact and GitHub Release.
+Each APK is explicitly signed with **APK Signature Scheme V2, V3, and V4** using `apksigner`. V4 produces a companion `.idsig` file where the Android Build Tools emit it; the workflow requires all three ABI split `.idsig` files and includes any emitted universal `.idsig` alongside `SHA256SUMS.txt` in the workflow artifact and GitHub Release. This preserves the V4 artifact behavior without failing the release solely because the current Build Tools do not emit a universal-APK companion file.
 
 ### Required encrypted repository secrets
 
