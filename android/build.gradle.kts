@@ -23,13 +23,11 @@ subprojects {
 // hosted JDK 17 image. This narrowly disables only that dependency's broken
 // lint task; the QuranX application lint task remains enabled.
 subprojects {
-    afterEvaluate {
-        if (name == "url_launcher_android") {
-            tasks.matching {
-                it.name == "lintVitalAnalyzeRelease" || it.name == "lintAnalyzeRelease"
-            }.configureEach {
-                enabled = false
-            }
+    tasks.configureEach {
+        if (project.name == "url_launcher_android" &&
+            (name == "lintVitalAnalyzeRelease" || name == "lintAnalyzeRelease")
+        ) {
+            enabled = false
         }
     }
 }
