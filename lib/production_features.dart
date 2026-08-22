@@ -181,6 +181,7 @@ class AudioController extends ChangeNotifier {
 
   final AudioPlayer _player = AudioPlayer();
   bool _playing = false;
+  bool _loading = false;
   ProcessingState _processingState = ProcessingState.idle;
   String? currentSource;
   String? lastError;
@@ -193,15 +194,20 @@ class AudioController extends ChangeNotifier {
     if (uri == null || uri.scheme != 'https') {
       throw const FormatException('Sumber audio tidak aman atau tidak valid');
     }
+    if (_loading) return;
+    _loading = true;
     try {
       lastError = null;
       currentSource = url;
+      await _player.stop();
       await _player.setUrl(url);
       await _player.play();
-    } catch (error, stack) {
-      lastError = DiagnosticLog.record(error, stack, context: 'audio.playUrl');
+    } catch (error) {
+      lastError = error.toString();
       notifyListeners();
       rethrow;
+    } finally {
+      _loading = false;
     }
   }
 
@@ -209,15 +215,20 @@ class AudioController extends ChangeNotifier {
     if (!await file.exists()) {
       throw const FileSystemException('File audio offline tidak ditemukan');
     }
+    if (_loading) return;
+    _loading = true;
     try {
       lastError = null;
       currentSource = file.path;
+      await _player.stop();
       await _player.setFilePath(file.path);
       await _player.play();
-    } catch (error, stack) {
-      lastError = DiagnosticLog.record(error, stack, context: 'audio.playFile');
+    } catch (error) {
+      lastError = error.toString();
       notifyListeners();
       rethrow;
+    } finally {
+      _loading = false;
     }
   }
 
@@ -434,6 +445,38 @@ class ErrorDetailsView extends StatelessWidget {
   final String detail;
   final VoidCallback? onRetry;
 
+  String _issueBody() {
+    const maxReportLength = 7000;
+    if (detail.length <= maxReportLength) return detail;
+    return '${detail.substring(0, maxReportLength)}\n\n[Log dipotong pada 7000 karakter. Gunakan Copy Full Error Log untuk log lengkap.]';
+  }
+
+  Future<void> _reportIssue(BuildContext context) async {
+    final issueUrl = Uri.https(
+      'github.com',
+      '/XbibzOfficial777/Bibz-Islamic-App/issues/new',
+      <String, String>{
+        'title': '[QuranX] ${title.replaceAll(RegExp(r'\s+'), ' ').trim()}',
+        'body':
+            '## QuranX error report\n\nGenerated from the in-app Report Issue action.\n\n```text\n${_issueBody()}\n```',
+        'labels': 'bug',
+      },
+    );
+    final launched = await launchUrl(
+      issueUrl,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'GitHub tidak dapat dibuka. Salin log lalu buat issue secara manual.',
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.all(24),
@@ -451,7 +494,7 @@ class ErrorDetailsView extends StatelessWidget {
       ),
       const SizedBox(height: 8),
       const Text(
-        'Data valid sebelumnya tetap dipertahankan. Anda dapat mencoba lagi atau menyalin detail teknis.',
+        'Data valid sebelumnya tetap dipertahankan. Salin log lengkap atau laporkan masalah dengan detail teknis yang sudah diisi.',
         textAlign: TextAlign.center,
       ),
       const SizedBox(height: 16),
@@ -465,12 +508,18 @@ class ErrorDetailsView extends StatelessWidget {
           await Clipboard.setData(ClipboardData(text: detail));
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Detail error disalin.')),
+              const SnackBar(content: Text('Full error log disalin.')),
             );
           }
         },
         icon: const Icon(Icons.copy),
-        label: const Text('Salin full error'),
+        label: const Text('Copy Full Error Log'),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        onPressed: () => _reportIssue(context),
+        icon: const Icon(Icons.bug_report_outlined),
+        label: const Text('Report Issue'),
       ),
       if (onRetry != null) ...[
         const SizedBox(height: 8),
@@ -706,9 +755,13 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     body: Column(
       children: [
         if (message != null)
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(message!, maxLines: 4, overflow: TextOverflow.ellipsis),
+          SizedBox(
+            height: 270,
+            child: ErrorDetailsView(
+              title: 'Unduhan gagal',
+              detail: message!,
+              onRetry: () => setState(() => message = null),
+            ),
           ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),

@@ -132,3 +132,11 @@ The repository’s automated coverage now includes validator rejection, appearan
 The current API does not expose a verified reciter catalog, so QuranX uses the audio URLs returned by the API and does not display a fake Qari selector. Background media notification, lock-screen controls, pause/resume range downloads, local database migrations, and full-device integration tests require additional platform work beyond the current verified scope. These are intentionally not represented as completed functionality.
 
 The `/quran/juz` route did not produce a usable response during verification. Juz search is therefore local-data-driven and must not be presented as a server-backed Juz index until the API provides a validated contract.
+
+## Error reporting and GitHub issues
+
+Every full error surface presents two primary actions: **Copy Full Error Log** and **Report Issue**. The first copies the complete selectable diagnostic text, including timestamp, context, exception type, message, and stack trace. The second opens the repository’s GitHub `issues/new` page with a prefilled bug title, `bug` label, and encoded diagnostic body.
+
+The Report Issue action deliberately does not embed a GitHub personal access token in the APK. A mobile binary containing such a token could expose repository write access. The safe production behavior is therefore a prefilled issue form that the authenticated repository owner reviews and submits. Fully silent issue creation would require a backend or GitHub App with a server-side secret and rate limiting.
+
+The attached field report showed duplicate entries for the same audio failure: `AudioController.playUrl` recorded `PlayerInterruptedException`, then `_ReaderScreenState._playAyah` recorded the same exception again. QuranX now records the user-facing playback failure once, prevents overlapping player loads, stops the previous source before loading a new one, and still retains the full stack trace for the report flow.

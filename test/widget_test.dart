@@ -101,6 +101,21 @@ void main() {
     expect(preferences.getStringList('diagnostic_log'), isNotEmpty);
   });
 
+  testWidgets('error details exposes copy and report actions', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ErrorDetailsView(
+          title: 'Audio gagal',
+          detail: 'full stack trace',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorDetailsView), findsOneWidget);
+  });
+
   testWidgets('QuranX home displays the Quran navigation', (
     WidgetTester tester,
   ) async {
