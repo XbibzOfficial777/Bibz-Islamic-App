@@ -503,10 +503,19 @@ class _HomeScreenState extends State<HomeScreen> {
             color: const Color(0xffe1f3e9),
             borderRadius: BorderRadius.circular(24),
           ),
-          child: const Column(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Assalamu’alaikum', style: TextStyle(fontSize: 15)),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: Image.asset(
+                  'assets/brand/bibz_islamic_logo.png',
+                  width: 76,
+                  height: 76,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Assalamu’alaikum', style: TextStyle(fontSize: 15)),
               SizedBox(height: 8),
               Text(
                 'Lanjutkan tilawah dengan tenang.',
