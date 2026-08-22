@@ -1,10 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
+import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+part 'production_features.dart';
 
 const apiBaseUrl = 'https://bibzislamicc.vercel.app/api/v1';
 
@@ -25,12 +32,14 @@ class Ayah {
     required this.arabic,
     required this.transliteration,
     required this.translation,
+    this.juz,
     this.audioUrl,
   });
   final int number;
   final String arabic;
   final String transliteration;
   final String translation;
+  final int? juz;
   final String? audioUrl;
 
   factory Ayah.fromJson(Map<String, dynamic> json) => Ayah(
@@ -38,6 +47,7 @@ class Ayah {
     arabic: json['arabicText'] as String,
     transliteration: (json['latinText'] as String?) ?? '',
     translation: (json['indonesianTranslation'] as String?) ?? '',
+    juz: json['juz'] as int?,
     audioUrl: json['audioMp3Url'] as String?,
   );
 
@@ -46,6 +56,7 @@ class Ayah {
     'arabicText': arabic,
     'latinText': transliteration,
     'indonesianTranslation': translation,
+    'juz': juz,
     'audioMp3Url': audioUrl,
   };
 }
@@ -270,6 +281,48 @@ class QuranRepository {
     }
     return results;
   }
+
+  List<Map<String, dynamic>> searchSurah(String query) {
+    final normalized = query.trim().toLowerCase();
+    return surahCatalog
+        .where(
+          (summary) =>
+              summary.number.toString() == normalized ||
+              summary.name.toLowerCase().contains(normalized),
+        )
+        .map(
+          (summary) => {
+            'title': '${summary.number}. ${summary.name}',
+            'subtitle': '${summary.ayahCount} ayat',
+            'surahNumber': summary.number,
+            'ayahNumber': 1,
+          },
+        )
+        .toList();
+  }
+
+  List<Map<String, dynamic>> searchJuz(int juz) {
+    final results = <Map<String, dynamic>>[];
+    for (final summary in surahCatalog) {
+      final surah = store.readSurah(summary.number);
+      if (surah == null) continue;
+      for (final ayah in surah.ayahs) {
+        final inCanonicalRange =
+            juz >= 1 &&
+            juz <= canonicalJuzRanges.length &&
+            _inJuzRange(surah.number, ayah.number, canonicalJuzRanges[juz - 1]);
+        if (ayah.juz == juz || inCanonicalRange) {
+          results.add({
+            'title': 'QS. ${surah.number}:${ayah.number}',
+            'subtitle': ayah.translation,
+            'surahNumber': surah.number,
+            'ayahNumber': ayah.number,
+          });
+        }
+      }
+    }
+    return results;
+  }
 }
 
 const surahCatalog = <SurahSummary>[
@@ -391,11 +444,23 @@ const surahCatalog = <SurahSummary>[
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    DiagnosticLog.record(
+      details.exception,
+      details.stack ?? StackTrace.current,
+      context: 'flutter.framework',
+    );
+  };
   final preferences = await SharedPreferences.getInstance();
-  runApp(
-    BibzApp(
-      repository: QuranRepository(QuranApiClient(), LocalStore(preferences)),
+  await DiagnosticLog.initialize(preferences);
+  runZonedGuarded(
+    () => runApp(
+      BibzApp(
+        repository: QuranRepository(QuranApiClient(), LocalStore(preferences)),
+      ),
     ),
+    (error, stack) => DiagnosticLog.record(error, stack, context: 'dart.zone'),
   );
 }
 
@@ -408,51 +473,60 @@ class BibzApp extends StatefulWidget {
 }
 
 class _BibzAppState extends State<BibzApp> {
-  late AppThemePreference preference;
+  late QuranXAppearance appearance;
+  late final AudioController audio;
+  late final NetworkMonitor network;
 
   @override
   void initState() {
     super.initState();
-    preference = widget.repository.store.themePreference();
+    appearance = widget.repository.store.appearance();
+    audio = AudioController();
+    network = NetworkMonitor();
   }
 
-  ThemeMode get themeMode {
-    switch (preference) {
-      case AppThemePreference.light:
-        return ThemeMode.light;
-      case AppThemePreference.dark:
-        return ThemeMode.dark;
-      case AppThemePreference.system:
-        return ThemeMode.system;
-    }
+  @override
+  void dispose() {
+    audio.dispose();
+    network.dispose();
+    super.dispose();
   }
 
-  Future<void> setThemePreference(AppThemePreference value) async {
-    await widget.repository.store.setThemePreference(value);
-    if (mounted) setState(() => preference = value);
+  Future<void> setAppearance(QuranXAppearance value) async {
+    await widget.repository.store.saveAppearance(value);
+    if (mounted) setState(() => appearance = value);
   }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'QuranX',
     debugShowCheckedModeBanner: false,
-    themeMode: themeMode,
+    themeMode: appearance.themeMode,
     theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff0e6b55)),
+      fontFamily: appearance.resolvedFontFamily,
+      colorScheme: ColorScheme.fromSeed(seedColor: appearance.seedColor),
       useMaterial3: true,
     ),
     darkTheme: ThemeData(
       brightness: Brightness.dark,
+      fontFamily: appearance.resolvedFontFamily,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xff69d3af),
+        seedColor: appearance.seedColor,
         brightness: Brightness.dark,
       ),
       useMaterial3: true,
     ),
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context)
+          .copyWith(textScaler: TextScaler.linear(appearance.textScale)),
+      child: child ?? const SizedBox.shrink(),
+    ),
     home: HomeScreen(
       repository: widget.repository,
-      themePreference: preference,
-      onThemePreferenceChanged: setThemePreference,
+      appearance: appearance,
+      onAppearanceChanged: setAppearance,
+      audio: audio,
+      network: network,
     ),
   );
 }
@@ -461,12 +535,16 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     required this.repository,
-    required this.themePreference,
-    required this.onThemePreferenceChanged,
+    required this.appearance,
+    required this.onAppearanceChanged,
+    required this.audio,
+    required this.network,
   });
   final QuranRepository repository;
-  final AppThemePreference themePreference;
-  final Future<void> Function(AppThemePreference) onThemePreferenceChanged;
+  final QuranXAppearance appearance;
+  final Future<void> Function(QuranXAppearance) onAppearanceChanged;
+  final AudioController audio;
+  final NetworkMonitor network;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -496,11 +574,24 @@ class _HomeScreenState extends State<HomeScreen> {
           ? local
           : await widget.repository.api.search(query);
       if (mounted) setState(() => searchResults = results);
-    } catch (error) {
+    } catch (error, stack) {
+      final detail = DiagnosticLog.record(error, stack, context: 'home.search');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Pencarian tidak tersedia: $error')),
+          SnackBar(
+            content: const Text(
+              'Pencarian tidak tersedia. Detail tersimpan di Log kesalahan.',
+            ),
+            action: SnackBarAction(
+              label: 'Lihat',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DiagnosticsScreen()),
+              ),
+            ),
+          ),
         );
+        developer.log(detail, name: 'QuranX.search');
       }
     } finally {
       if (mounted) setState(() => searching = false);
@@ -509,25 +600,127 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
+    drawer: Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          DrawerHeader(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+            ),
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Text(
+                'QuranX',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.search),
+            title: const Text('Search Surah / Juz'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => SearchScreen(repository: widget.repository),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Unduhan Quran & Audio'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => DownloadsScreen(
+                    repository: widget.repository,
+                    audio: widget.audio,
+                  ),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings_outlined),
+            title: const Text('Settings'),
+            onTap: () {
+              Navigator.pop(context);
+              setState(() => tab = 3);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.bug_report_outlined),
+            title: const Text('Log kesalahan'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DiagnosticsScreen()),
+              );
+            },
+          ),
+        ],
+      ),
+    ),
     appBar: AppBar(
+      leading: Builder(
+        builder: (context) => IconButton(
+          tooltip: 'Buka menu',
+          onPressed: () => Scaffold.of(context).openDrawer(),
+          icon: const Icon(Icons.menu),
+        ),
+      ),
       title: const Text(
         'QuranX',
         style: TextStyle(fontWeight: FontWeight.w700),
       ),
       actions: [
         IconButton(
-          onPressed: () => setState(() => tab = 3),
-          icon: const Icon(Icons.settings_outlined),
+          tooltip: 'Search',
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SearchScreen(repository: widget.repository),
+            ),
+          ),
+          icon: const Icon(Icons.search),
         ),
       ],
     ),
-    body: IndexedStack(
-      index: tab,
+    body: Column(
       children: [
-        _homeTab(context),
-        _quranTab(context),
-        _bookmarksTab(context),
-        _settingsTab(context),
+        ListenableBuilder(
+          listenable: widget.network,
+          builder: (context, child) => widget.network.online
+              ? const SizedBox.shrink()
+              : Container(
+                  width: double.infinity,
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: const Text(
+                    'Offline mode: hanya data dan audio yang sudah diunduh yang tersedia.',
+                  ),
+                ),
+        ),
+        Expanded(
+          child: IndexedStack(
+            index: tab,
+            children: [
+              _homeTab(context),
+              _quranTab(context),
+              _bookmarksTab(context),
+              _settingsTab(context),
+            ],
+          ),
+        ),
       ],
     ),
     bottomNavigationBar: NavigationBar(
@@ -566,7 +759,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Container(
           padding: const EdgeInsets.all(22),
           decoration: BoxDecoration(
-            color: const Color(0xffe1f3e9),
+            color: Theme.of(context).colorScheme.primaryContainer,
             borderRadius: BorderRadius.circular(24),
           ),
           child: Column(
@@ -677,7 +870,7 @@ class _HomeScreenState extends State<HomeScreen> {
     margin: const EdgeInsets.only(bottom: 8),
     child: ListTile(
       leading: CircleAvatar(
-        backgroundColor: const Color(0xffe1f3e9),
+        backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
         child: Text('${summary.number}'),
       ),
       title: Text(
@@ -724,31 +917,26 @@ class _HomeScreenState extends State<HomeScreen> {
         style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
       ),
       const SizedBox(height: 16),
+      AppearanceSettingsCard(
+        appearance: widget.appearance,
+        onChanged: widget.onAppearanceChanged,
+      ),
       Card(
         child: ListTile(
-          leading: const Icon(Icons.palette_outlined),
-          title: const Text('Tema aplikasi'),
-          subtitle: Text(_themeLabel(widget.themePreference)),
-          trailing: DropdownButton<AppThemePreference>(
-            value: widget.themePreference,
-            underline: const SizedBox.shrink(),
-            onChanged: (value) {
-              if (value != null) widget.onThemePreferenceChanged(value);
-            },
-            items: const [
-              DropdownMenuItem(
-                value: AppThemePreference.system,
-                child: Text('Sistem'),
+          leading: const Icon(Icons.download_outlined),
+          title: const Text('Unduh Quran / Audio'),
+          subtitle: const Text(
+            'Pilih surah dan jenis data yang ingin disimpan offline.',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => DownloadsScreen(
+                repository: widget.repository,
+                audio: widget.audio,
               ),
-              DropdownMenuItem(
-                value: AppThemePreference.light,
-                child: Text('Light'),
-              ),
-              DropdownMenuItem(
-                value: AppThemePreference.dark,
-                child: Text('Dark'),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -757,7 +945,7 @@ class _HomeScreenState extends State<HomeScreen> {
           leading: const Icon(Icons.offline_bolt),
           title: const Text('Offline-first'),
           subtitle: const Text(
-            'Surah yang sudah dibuka tersimpan di perangkat.',
+            'Surah dan audio yang sudah diunduh tetap tersedia tanpa internet.',
           ),
         ),
       ),
@@ -770,26 +958,28 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+      Card(
+        child: ListTile(
+          leading: const Icon(Icons.bug_report_outlined),
+          title: const Text('Log kesalahan dan crash'),
+          subtitle: const Text(
+            'Lihat dan salin full error beserta stack trace.',
+          ),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const DiagnosticsScreen()),
+          ),
+        ),
+      ),
       const Card(
         child: ListTile(
           leading: Icon(Icons.info_outline),
-          title: Text('Tentang Bibz Islamic'),
+          title: Text('Tentang QuranX'),
           subtitle: Text('API: bibzislamicc.vercel.app/api/v1'),
         ),
       ),
     ],
   );
-
-  String _themeLabel(AppThemePreference value) {
-    switch (value) {
-      case AppThemePreference.system:
-        return 'Mengikuti pengaturan sistem';
-      case AppThemePreference.light:
-        return 'Mode terang';
-      case AppThemePreference.dark:
-        return 'Mode gelap';
-    }
-  }
 
   Future<void> _openSurah(BuildContext context, int number, int ayah) async {
     await Navigator.of(context).push(
@@ -798,6 +988,8 @@ class _HomeScreenState extends State<HomeScreen> {
           repository: widget.repository,
           number: number,
           initialAyah: ayah,
+          appearance: widget.appearance,
+          audio: widget.audio,
         ),
       ),
     );
@@ -811,10 +1003,14 @@ class ReaderScreen extends StatefulWidget {
     required this.repository,
     required this.number,
     required this.initialAyah,
+    required this.appearance,
+    required this.audio,
   });
   final QuranRepository repository;
   final int number;
   final int initialAyah;
+  final QuranXAppearance appearance;
+  final AudioController audio;
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
@@ -824,6 +1020,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Object? error;
   bool loading = true;
   final scrollController = ScrollController();
+  int? tajwidAyah;
 
   @override
   void initState() {
@@ -846,10 +1043,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
           loading = false;
         });
       }
-    } catch (value) {
+    } catch (value, stack) {
+      final detail = DiagnosticLog.record(
+        value,
+        stack,
+        context: 'reader.load.${widget.number}',
+      );
       if (mounted) {
         setState(() {
-          error = value;
+          error = detail;
           loading = false;
         });
       }
@@ -862,6 +1064,33 @@ class _ReaderScreenState extends State<ReaderScreen> {
     values.contains(key) ? values.remove(key) : values.add(key);
     await widget.repository.store.setBookmarks(values);
     if (mounted) setState(() {});
+  }
+
+  Future<void> _playAyah(Ayah ayah) async {
+    try {
+      final localPath = widget.repository.store.preferences.getString(
+        'audio_path_${widget.number}',
+      );
+      if (localPath != null && await File(localPath).exists()) {
+        await widget.audio.playFile(File(localPath));
+      } else if (ayah.audioUrl != null) {
+        await widget.audio.playUrl(ayah.audioUrl!);
+      } else {
+        throw const FormatException('Audio ayat belum tersedia');
+      }
+      if (mounted) setState(() {});
+    } catch (error, stack) {
+      final detail = DiagnosticLog.record(
+        error,
+        stack,
+        context: 'reader.play.${widget.number}.${ayah.number}',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Audio tidak dapat diputar: $detail')),
+        );
+      }
+    }
   }
 
   Future<void> _copyAyah(Ayah ayah) async {
@@ -887,15 +1116,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
     if (error != null) {
       return Scaffold(
-        appBar: AppBar(),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Surah belum tersedia offline dan API tidak dapat dihubungi.\n\n$error',
-              textAlign: TextAlign.center,
-            ),
-          ),
+        appBar: AppBar(title: const Text('Surah belum termuat')),
+        body: ErrorDetailsView(
+          title: 'Surah belum tersedia',
+          detail: error.toString(),
+          onRetry: () => setState(() {
+            error = null;
+            loading = true;
+            _load();
+          }),
         ),
       );
     }
@@ -927,7 +1156,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
         const SizedBox(height: 4),
         Text(
           '${data.revelationType} • ${data.ayahs.length} ayat',
-          style: TextStyle(color: Colors.grey.shade700),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 12),
         Text(
@@ -937,7 +1168,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
         const SizedBox(height: 8),
         Text(
           data.description,
-          style: TextStyle(color: Colors.grey.shade700, height: 1.4),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            height: 1.4,
+          ),
         ),
       ],
     ),
@@ -968,7 +1202,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   onPressed: () => _toggleBookmark(ayah),
                   icon: Icon(
                     marked ? Icons.bookmark : Icons.bookmark_border,
-                    color: marked ? const Color(0xff0e6b55) : null,
+                    color: marked
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
                   ),
                 ),
                 IconButton(
@@ -979,18 +1215,50 @@ class _ReaderScreenState extends State<ReaderScreen> {
               ],
             ),
             const SizedBox(height: 10),
+            Row(
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () => _playAyah(ayah),
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Putar audio'),
+                ),
+                const SizedBox(width: 8),
+                if (widget.audio.playing && widget.audio.currentSource != null)
+                  OutlinedButton.icon(
+                    onPressed: widget.audio.pause,
+                    icon: const Icon(Icons.pause),
+                    label: const Text('Jeda'),
+                  ),
+                const Spacer(),
+                if (widget.appearance.tajwidMode)
+                  IconButton(
+                    tooltip: 'Analisis Tajwid',
+                    onPressed: () => setState(
+                      () => tajwidAyah = tajwidAyah == ayah.number
+                          ? null
+                          : ayah.number,
+                    ),
+                    icon: Icon(
+                      tajwidAyah == ayah.number
+                          ? Icons.visibility
+                          : Icons.auto_awesome,
+                    ),
+                  ),
+              ],
+            ),
             Text(
               ayah.arabic,
               textDirection: TextDirection.rtl,
               textAlign: TextAlign.right,
               style: const TextStyle(fontSize: 29, height: 1.8),
             ),
+            if (tajwidAyah == ayah.number) TajwidPanel(text: ayah.arabic),
             const SizedBox(height: 8),
             Text(
               ayah.transliteration,
               style: TextStyle(
                 fontStyle: FontStyle.italic,
-                color: Colors.grey.shade700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 8),

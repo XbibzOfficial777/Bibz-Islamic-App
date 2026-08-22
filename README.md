@@ -114,3 +114,21 @@ The implementation follows the atomic data rule: a dataset is either validated a
 7. [GitHub upload-artifact action](https://github.com/actions/upload-artifact)
 8. [GitHub download-artifact action](https://github.com/actions/download-artifact)
 9. [GitHub release action](https://github.com/softprops/action-gh-release/releases)
+
+## Production feature implementation
+
+The current branch now includes explicit handling for surahs that are not loaded. The reader shows a non-blocking loading state, a clear unavailable state, a retry action, and a full selectable diagnostic detail. Flutter framework errors and uncaught Dart-zone errors are retained in a bounded local diagnostic history, which is visible from the hamburger menu and can be copied as plain text.
+
+The Settings surface includes persisted theme, accent color, interface font, text scale, translation/transliteration visibility, and Tajwid Mode controls. Color tokens are derived from the selected Material 3 seed color rather than remaining fixed to the original green palette.
+
+The reader includes per-ayah audio playback. It prefers a previously downloaded local surah audio file and otherwise streams the API-provided HTTPS ayah URL. The hamburger menu and Settings tab both open the selective offline download screen, where users can select surahs and choose Quran data or full-surah audio. Audio is downloaded as a stream to a temporary `.part` file, checked for a valid audio content type and minimum size, and atomically renamed only after validation. Prior valid data is preserved when a later download fails.
+
+Search now has separate **Surah** and **Juz** modes. Surah search covers the canonical catalog. Juz search uses explicit API Juz fields when available and a canonical boundary fallback over locally validated ayahs when the API omits those fields; it reports an empty/unavailable state when the required local surah data has not been downloaded. Tajwid Mode calls the verified `/quran/tajwid` endpoint and labels its result as the API’s available analysis. The currently observed endpoint returns generic basmalah analysis and ignores Surah/Ayah selectors, so the app does not claim per-ayah rule highlighting that the API does not provide.
+
+The repository’s automated coverage now includes validator rejection, appearance persistence, Juz indexing, durable diagnostics, and the QuranX home smoke test. The hosted Android workflow remains the authoritative APK build because the local sandbox does not include an Android SDK; the CI runner installs the required Android components and continues to publish split ABI and universal outputs.
+
+### Production limitations that remain explicit
+
+The current API does not expose a verified reciter catalog, so QuranX uses the audio URLs returned by the API and does not display a fake Qari selector. Background media notification, lock-screen controls, pause/resume range downloads, local database migrations, and full-device integration tests require additional platform work beyond the current verified scope. These are intentionally not represented as completed functionality.
+
+The `/quran/juz` route did not produce a usable response during verification. Juz search is therefore local-data-driven and must not be presented as a server-backed Juz index until the API provides a validated contract.
