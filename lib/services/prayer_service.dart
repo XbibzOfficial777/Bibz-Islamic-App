@@ -136,6 +136,9 @@ class PrayerApiClient {
   void dispose() => _client.close();
 }
 
+const _adhanChannelId = 'quranx_prayer_adhan_v2';
+const _fallbackPrayerChannelId = 'quranx_prayer_default_v1';
+
 class PrayerReminderService {
   PrayerReminderService(this.preferences);
 
@@ -143,6 +146,8 @@ class PrayerReminderService {
   final FlutterLocalNotificationsPlugin plugin =
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
+  bool? _customAdhanSoundUsable;
+  bool _customAdhanWarningRecorded = false;
 
   Future<void> initialize() async {
     if (_initialized) return;
@@ -168,15 +173,73 @@ class PrayerReminderService {
 
   AndroidNotificationDetails get _androidDetails =>
       const AndroidNotificationDetails(
-        'quranx_prayer_adhan_v1',
+        _adhanChannelId,
         'Adzan dan Jadwal Sholat QuranX',
         channelDescription: 'Pengingat waktu sholat QuranX dengan audio adzan',
         importance: Importance.max,
         priority: Priority.high,
         category: AndroidNotificationCategory.alarm,
         playSound: true,
-        sound: RawResourceAndroidNotificationSound('adhan_madinah'),
+        sound: RawResourceAndroidNotificationSound('quranx_adhan'),
       );
+
+  AndroidNotificationDetails get _fallbackDetails =>
+      const AndroidNotificationDetails(
+        _fallbackPrayerChannelId,
+        'Jadwal Sholat QuranX',
+        channelDescription:
+            'Pengingat waktu sholat QuranX dengan suara sistem perangkat',
+        importance: Importance.max,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.alarm,
+        playSound: true,
+      );
+
+  Future<void> _scheduleNotification({
+    required int id,
+    required String title,
+    required String body,
+    required tz.TZDateTime scheduledDate,
+    required String payload,
+  }) async {
+    final notificationDetails = NotificationDetails(
+      android: _customAdhanSoundUsable == false
+          ? _fallbackDetails
+          : _androidDetails,
+    );
+    try {
+      await plugin.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: scheduledDate,
+        notificationDetails: notificationDetails,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: payload,
+      );
+      _customAdhanSoundUsable ??= true;
+    } catch (value, stack) {
+      if (_customAdhanSoundUsable == false) rethrow;
+      _customAdhanSoundUsable = false;
+      if (!_customAdhanWarningRecorded) {
+        _customAdhanWarningRecorded = true;
+        DiagnosticLog.recordWarning(
+          'Audio adzan bundled tidak dapat dipakai oleh Android; notifikasi dilanjutkan dengan suara sistem.',
+          context: 'prayer.notification_sound',
+          stack: stack,
+        );
+      }
+      await plugin.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: scheduledDate,
+        notificationDetails: NotificationDetails(android: _fallbackDetails),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: payload,
+      );
+    }
+  }
 
   Future<void> schedule(
     PrayerSchedule schedule, {
@@ -193,7 +256,6 @@ class PrayerReminderService {
     }
     if (clearExisting) await plugin.cancelAll();
     final now = tz.TZDateTime.now(tz.local);
-    final details = NotificationDetails(android: _androidDetails);
     for (final name in const ['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya']) {
       final parts = schedule.times[name]!.split(':');
       final hour = int.parse(parts[0]);
@@ -211,14 +273,12 @@ class PrayerReminderService {
       );
       final scheduled = base.subtract(Duration(minutes: leadMinutes));
       if (!scheduled.isAfter(now)) continue;
-      await plugin.zonedSchedule(
+      await _scheduleNotification(
         id: _notificationId(name, dayOffset),
         title: 'Notifikasi Sholat ${_displayName(name)}',
         body:
             '${_displayName(name)} ${schedule.times[name]} • ${schedule.cityName}',
         scheduledDate: scheduled,
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         payload: '${schedule.cityId}|${schedule.date.toIso8601String()}|$name',
       );
     }

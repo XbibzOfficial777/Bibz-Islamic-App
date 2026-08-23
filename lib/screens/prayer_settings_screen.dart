@@ -32,6 +32,58 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
     super.dispose();
   }
 
+  Future<void> _showLocationRecovery(Object value) async {
+    if (!mounted) return;
+    if (value is GpsServiceDisabledException) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Aktifkan lokasi perangkat'),
+          content: const Text(
+            'GPS perangkat sedang nonaktif. Aktifkan layanan lokasi agar QuranX dapat membaca wilayah Anda, lalu kembali ke aplikasi dan tekan Gunakan lokasi GPS saya lagi.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Nanti'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await Geolocator.openLocationSettings();
+              },
+              child: const Text('Buka pengaturan lokasi'),
+            ),
+          ],
+        ),
+      );
+    } else if (value is GpsPermissionDeniedException &&
+        value.permanentlyDenied) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Izin lokasi diperlukan'),
+          content: const Text(
+            'Izin lokasi QuranX ditolak permanen. Aktifkan izin lokasi dari Pengaturan aplikasi untuk menggunakan jadwal sholat berbasis GPS.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Tutup'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await Geolocator.openAppSettings();
+              },
+              child: const Text('Buka pengaturan aplikasi'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
   Future<void> _useGps() async {
     setState(() {
       loading = true;
@@ -47,6 +99,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
         loading = false;
         error = DiagnosticLog.record(value, stack, context: 'prayer.gps');
       });
+      await _showLocationRecovery(value);
     }
   }
 

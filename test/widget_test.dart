@@ -86,6 +86,15 @@ void main() {
     expect(repository.searchJuz(2), isEmpty);
   });
 
+  test('GPS errors expose actionable permission recovery states', () {
+    expect(GpsServiceDisabledException().message, contains('nonaktif'));
+    final permanentlyDenied = GpsPermissionDeniedException(
+      permanentlyDenied: true,
+    );
+    expect(permanentlyDenied.message, contains('Pengaturan aplikasi'));
+    expect(permanentlyDenied.permanentlyDenied, isTrue);
+  });
+
   test('GPS Tulungagung resolves through the QuranX city catalog', () {
     const city = PrayerCity(id: '1629', name: 'KAB. TULUNGAGUNG');
     final queries = buildPrayerLocationQueries([

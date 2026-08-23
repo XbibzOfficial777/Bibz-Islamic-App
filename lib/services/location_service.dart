@@ -1,5 +1,21 @@
 part of '../main.dart';
 
+class GpsServiceDisabledException extends StateError {
+  GpsServiceDisabledException()
+    : super('Layanan lokasi/GPS perangkat sedang nonaktif.');
+}
+
+class GpsPermissionDeniedException extends StateError {
+  GpsPermissionDeniedException({required this.permanentlyDenied})
+    : super(
+        permanentlyDenied
+            ? 'Izin lokasi ditolak permanen. Aktifkan izin lokasi QuranX dari Pengaturan aplikasi.'
+            : 'Izin lokasi diperlukan untuk jadwal sholat otomatis.',
+      );
+
+  final bool permanentlyDenied;
+}
+
 String _normalizePrayerLocationName(String value) {
   final withoutPunctuation = value
       .toLowerCase()
@@ -50,17 +66,20 @@ class GpsPrayerResolver {
   final Geocoding geocoder = Geocoding();
 
   Future<PrayerCity> resolveCity(PrayerApiClient api) async {
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      throw StateError('Layanan lokasi/GPS perangkat sedang nonaktif.');
-    }
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      throw StateError('Izin lokasi diperlukan untuk jadwal sholat otomatis.');
+    if (permission == LocationPermission.deniedForever) {
+      throw GpsPermissionDeniedException(permanentlyDenied: true);
     }
+    if (permission == LocationPermission.denied) {
+      throw GpsPermissionDeniedException(permanentlyDenied: false);
+    }
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      throw GpsServiceDisabledException();
+    }
+
     final position = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.medium,
