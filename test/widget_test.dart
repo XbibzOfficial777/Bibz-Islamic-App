@@ -108,6 +108,34 @@ void main() {
     expect(selectPrayerCity('Kecamatan Tulungagung', [city]), city);
   });
 
+  test('prayer countdown reports the next prayer in hours minutes seconds', () {
+    final schedule = PrayerSchedule(
+      cityId: 1629,
+      cityName: 'KAB. TULUNGAGUNG',
+      regionName: 'JAWA TIMUR',
+      date: DateTime(2026, 8, 24),
+      times: {
+        'imsak': '04:20',
+        'subuh': '04:30',
+        'terbit': '05:40',
+        'dhuha': '06:10',
+        'dzuhur': '11:45',
+        'ashar': '15:05',
+        'maghrib': '17:40',
+        'isya': '18:50',
+      },
+    );
+    final moment = findNextPrayer(schedule, DateTime(2026, 8, 24, 10, 44));
+    expect(moment?.name, 'dzuhur');
+    expect(
+      formatPrayerCountdown(
+        moment!.time.difference(DateTime(2026, 8, 24, 10, 44)),
+      ),
+      '01 jam 01 menit 00 detik',
+    );
+    expect(findNextPrayer(schedule, DateTime(2026, 8, 24, 19)), isNull);
+  });
+
   test('prayer schedule validates live city and requested date', () {
     final schedule = PrayerSchedule.fromApi(
       {

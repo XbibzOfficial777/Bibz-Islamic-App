@@ -1,5 +1,13 @@
 part of '../main.dart';
 
+const _notificationPrayerNames = <String>[
+  'subuh',
+  'dzuhur',
+  'ashar',
+  'maghrib',
+  'isya',
+];
+
 class PrayerSettingsScreen extends StatefulWidget {
   const PrayerSettingsScreen({super.key, required this.repository});
 
@@ -18,16 +26,22 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
   String? error;
   bool loading = false;
   bool scheduling = false;
+  DateTime now = DateTime.now();
+  Timer? countdownTimer;
 
   @override
   void initState() {
     super.initState();
     reminders = PrayerReminderService(widget.repository.store.preferences);
     reminders.initialize();
+    countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => now = DateTime.now());
+    });
   }
 
   @override
   void dispose() {
+    countdownTimer?.cancel();
     api.dispose();
     super.dispose();
   }
@@ -38,9 +52,9 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Aktifkan lokasi perangkat'),
+          title: const Text('Aktifkan lokasi'),
           content: const Text(
-            'GPS perangkat sedang nonaktif. Aktifkan layanan lokasi agar QuranX dapat membaca wilayah Anda, lalu kembali ke aplikasi dan tekan Gunakan lokasi GPS saya lagi.',
+            'GPS perangkat nonaktif. Aktifkan lokasi untuk melanjutkan.',
           ),
           actions: [
             TextButton(
@@ -52,7 +66,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
                 Navigator.of(context).pop();
                 await Geolocator.openLocationSettings();
               },
-              child: const Text('Buka pengaturan lokasi'),
+              child: const Text('Buka pengaturan'),
             ),
           ],
         ),
@@ -63,9 +77,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Izin lokasi diperlukan'),
-          content: const Text(
-            'Izin lokasi QuranX ditolak permanen. Aktifkan izin lokasi dari Pengaturan aplikasi untuk menggunakan jadwal sholat berbasis GPS.',
-          ),
+          content: const Text('Aktifkan izin lokasi QuranX di Pengaturan.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
@@ -76,7 +88,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
                 Navigator.of(context).pop();
                 await Geolocator.openAppSettings();
               },
-              child: const Text('Buka pengaturan aplikasi'),
+              child: const Text('Buka pengaturan'),
             ),
           ],
         ),
@@ -119,6 +131,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
       setState(() {
         schedule = loaded;
         loading = false;
+        now = DateTime.now();
       });
     } catch (value, stack) {
       if (!mounted) return;
@@ -141,11 +154,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
       await reminders.scheduleSevenDays(api, value.cityId);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Notifikasi Subuh, Dzuhur, Ashar, Maghrib, dan Isya dijadwalkan.',
-            ),
-          ),
+          const SnackBar(content: Text('Notifikasi sholat aktif.')),
         );
       }
     } catch (value, stack) {
@@ -163,27 +172,22 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
     }
   }
 
+  PrayerMoment? _nextPrayer() {
+    final value = schedule;
+    if (value == null) return null;
+    return findNextPrayer(value, now);
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Jadwal Sholat')),
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text(
-          'Lokasi jadwal sholat diambil dari GPS perangkat, lalu dicocokkan dengan katalog kota pada API QuranX.',
-        ),
-        const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: loading ? null : _useGps,
           icon: const Icon(Icons.my_location),
-          label: Text(
-            loading ? 'Mendapatkan lokasi…' : 'Gunakan lokasi GPS saya',
-          ),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'QuranX menggunakan nama wilayah hasil reverse-geocoding hanya untuk mencari cityId; jadwal tetap diambil dari API QuranX yang sama.',
-          style: TextStyle(fontSize: 12),
+          label: Text(loading ? 'Mencari lokasi…' : 'Gunakan lokasi saya'),
         ),
         if (error != null)
           Padding(
@@ -194,7 +198,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
             ),
           ),
         if (selectedCity != null) ...[
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           Text(
             selectedCity!.name,
             style: Theme.of(context).textTheme.titleLarge,
@@ -204,15 +208,12 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
               '${schedule!.regionName} • ${schedule!.date.toIso8601String().substring(0, 10)}',
             ),
             const SizedBox(height: 8),
+            _PrayerCountdown(moment: _nextPrayer(), now: now),
             Card(
               child: Column(
-                children: const [
-                  'subuh',
-                  'dzuhur',
-                  'ashar',
-                  'maghrib',
-                  'isya',
-                ].map((name) => _PrayerTimeRow(name: name)).toList(),
+                children: _notificationPrayerNames
+                    .map((name) => _PrayerTimeRow(name: name))
+                    .toList(),
               ),
             ),
             FilledButton.icon(
@@ -222,9 +223,9 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
                 scheduling ? 'Menjadwalkan…' : 'Aktifkan notifikasi sholat',
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             const Text(
-              'Suara adzan pilihan belum ditampilkan karena API yang sama belum menyediakan katalog audio adzan terverifikasi.',
+              'Notifikasi memakai audio adzan.',
               style: TextStyle(fontSize: 12),
             ),
           ],
@@ -232,6 +233,80 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
       ],
     ),
   );
+}
+
+class PrayerMoment {
+  const PrayerMoment({required this.name, required this.time});
+
+  final String name;
+  final DateTime time;
+}
+
+PrayerMoment? findNextPrayer(PrayerSchedule schedule, DateTime now) {
+  final currentDate = DateTime(now.year, now.month, now.day);
+  final scheduleDate = DateTime(
+    schedule.date.year,
+    schedule.date.month,
+    schedule.date.day,
+  );
+  if (scheduleDate != currentDate) return null;
+
+  for (final name in _notificationPrayerNames) {
+    final parts = schedule.times[name]!.split(':');
+    final target = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      int.parse(parts[0]),
+      int.parse(parts[1]),
+    );
+    if (target.isAfter(now)) {
+      return PrayerMoment(name: name, time: target);
+    }
+  }
+  return null;
+}
+
+String formatPrayerCountdown(Duration remaining) {
+  final seconds = remaining.inSeconds.clamp(0, 86399);
+  final duration = Duration(seconds: seconds);
+  final hours = duration.inHours.toString().padLeft(2, '0');
+  final minutes = (duration.inMinutes % 60).toString().padLeft(2, '0');
+  final secondsText = (duration.inSeconds % 60).toString().padLeft(2, '0');
+  return '$hours jam $minutes menit $secondsText detik';
+}
+
+class _PrayerCountdown extends StatelessWidget {
+  const _PrayerCountdown({required this.moment, required this.now});
+
+  final PrayerMoment? moment;
+  final DateTime now;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (moment == null) {
+      return const Card(
+        child: ListTile(
+          leading: Icon(Icons.check_circle_outline),
+          title: Text('Jadwal sholat hari ini selesai'),
+        ),
+      );
+    }
+    final countdown = formatPrayerCountdown(moment!.time.difference(now));
+    return Card(
+      color: theme.colorScheme.primaryContainer,
+      child: ListTile(
+        leading: const Icon(Icons.timer_outlined),
+        title: Text(
+          'Adzan berikutnya: ${PrayerReminderService._displayName(moment!.name)}',
+        ),
+        subtitle: Text(
+          '$countdown • ${moment!.time.hour.toString().padLeft(2, '0')}:${moment!.time.minute.toString().padLeft(2, '0')}',
+        ),
+      ),
+    );
+  }
 }
 
 class _PrayerTimeRow extends StatelessWidget {
