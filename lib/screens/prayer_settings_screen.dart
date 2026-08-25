@@ -20,30 +20,44 @@ class PrayerSettingsScreen extends StatefulWidget {
 class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
   final api = PrayerApiClient();
   final gps = GpsPrayerResolver();
+  final locationController = TextEditingController();
   late final PrayerReminderService reminders;
   PrayerCity? selectedCity;
   PrayerSchedule? schedule;
+  List<PrayerCity> searchResults = const [];
   String? error;
+  String? locationSearchError;
   bool loading = false;
   bool scheduling = false;
+  bool searchingLocations = false;
   DateTime now = DateTime.now();
   Timer? countdownTimer;
+  Timer? searchDebounce;
 
   @override
   void initState() {
     super.initState();
     reminders = PrayerReminderService(widget.repository.store.preferences);
-    reminders.initialize();
     countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => now = DateTime.now());
     });
+    _restoreSavedLocation();
   }
 
   @override
   void dispose() {
     countdownTimer?.cancel();
+    searchDebounce?.cancel();
+    locationController.dispose();
     api.dispose();
     super.dispose();
+  }
+
+  Future<void> _restoreSavedLocation() async {
+    await reminders.initialize();
+    final savedCity = readSavedPrayerCity(widget.repository.store.preferences);
+    if (!mounted || savedCity == null) return;
+    await _selectCity(savedCity, clearSearch: false);
   }
 
   Future<void> _showLocationRecovery(Object value) async {
@@ -53,9 +67,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Aktifkan lokasi'),
-          content: const Text(
-            'GPS perangkat nonaktif. Aktifkan lokasi untuk melanjutkan.',
-          ),
+          content: const Text('GPS perangkat nonaktif.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
@@ -115,18 +127,68 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
     }
   }
 
-  Future<void> _selectCity(PrayerCity city) async {
+  void _onLocationQueryChanged(String value) {
+    searchDebounce?.cancel();
+    final query = value.trim();
+    if (query.length < 2) {
+      setState(() {
+        searchResults = const [];
+        locationSearchError = null;
+        searchingLocations = false;
+      });
+      return;
+    }
+    setState(() {
+      searchingLocations = true;
+      locationSearchError = null;
+    });
+    searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      _searchLocations(query);
+    });
+  }
+
+  Future<void> _searchLocations(String query) async {
+    try {
+      final results = await api.searchCities(query);
+      if (!mounted || locationController.text.trim() != query) return;
+      setState(() {
+        searchResults = results.take(12).toList();
+        searchingLocations = false;
+      });
+    } catch (value, stack) {
+      if (!mounted || locationController.text.trim() != query) return;
+      setState(() {
+        searchingLocations = false;
+        searchResults = const [];
+        locationSearchError = DiagnosticLog.record(
+          value,
+          stack,
+          context: 'prayer.location_search',
+        );
+      });
+    }
+  }
+
+  Future<void> _selectCity(PrayerCity city, {bool clearSearch = true}) async {
     final cityId = int.tryParse(city.id);
     if (cityId == null) return;
     FocusManager.instance.primaryFocus?.unfocus();
+    if (clearSearch) locationController.clear();
     setState(() {
       selectedCity = city;
+      searchResults = const [];
+      locationSearchError = null;
       loading = true;
       error = null;
       schedule = null;
     });
     try {
       final loaded = await api.fetchSchedule(cityId, DateTime.now());
+      await savePrayerCity(
+        widget.repository.store.preferences,
+        city,
+        regionName: loaded.regionName,
+      );
       if (!mounted) return;
       setState(() {
         schedule = loaded;
@@ -184,11 +246,50 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        const Text('Lokasi'),
+        const SizedBox(height: 8),
         FilledButton.icon(
           onPressed: loading ? null : _useGps,
           icon: const Icon(Icons.my_location),
-          label: Text(loading ? 'Mencari lokasi…' : 'Gunakan lokasi saya'),
+          label: Text(loading ? 'Memperbarui…' : 'Perbarui Lokasi'),
         ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: locationController,
+          textInputAction: TextInputAction.search,
+          decoration: const InputDecoration(
+            labelText: 'Cari kota atau kabupaten',
+            prefixIcon: Icon(Icons.search),
+          ),
+          onChanged: _onLocationQueryChanged,
+        ),
+        if (searchingLocations)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: LinearProgressIndicator(),
+          ),
+        if (locationSearchError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              locationSearchError!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        if (searchResults.isNotEmpty)
+          Card(
+            child: Column(
+              children: searchResults
+                  .map(
+                    (city) => ListTile(
+                      title: Text(city.name),
+                      leading: const Icon(Icons.location_city_outlined),
+                      onTap: () => _selectCity(city),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.only(top: 12),

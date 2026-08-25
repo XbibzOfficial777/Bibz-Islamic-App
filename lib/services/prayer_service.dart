@@ -145,18 +145,68 @@ class PrayerReminderService {
   final SharedPreferences preferences;
   final FlutterLocalNotificationsPlugin plugin =
       FlutterLocalNotificationsPlugin();
-  bool _initialized = false;
+  bool _timezoneConfigured = false;
   bool? _customAdhanSoundUsable;
   bool _customAdhanWarningRecorded = false;
+  Future<void>? _initializing;
 
-  Future<void> initialize() async {
-    if (_initialized) return;
+  Future<void> initialize() {
+    return _initializing ??= _initialize();
+  }
+
+  Future<void> _initialize() async {
     tz.initializeTimeZones();
+    await _syncDeviceTimezone();
     const settings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     );
     await plugin.initialize(settings: settings);
-    _initialized = true;
+  }
+
+  Future<void> _syncDeviceTimezone() async {
+    try {
+      final deviceTimezone = await FlutterTimezone.getLocalTimezone();
+      tz.setLocalLocation(tz.getLocation(deviceTimezone.identifier));
+      _timezoneConfigured = true;
+    } catch (value, stack) {
+      final deviceOffset = DateTime.now().timeZoneOffset;
+      final abbreviation = DateTime.now().timeZoneName;
+      tz.setLocalLocation(
+        tz.Location('QuranX/device-offset', const <int>[], const <int>[], [
+          tz.TimeZone(
+            deviceOffset,
+            isDst: false,
+            abbreviation: abbreviation.isEmpty ? 'LOCAL' : abbreviation,
+          ),
+        ]),
+      );
+      _timezoneConfigured = true;
+      DiagnosticLog.recordWarning(
+        'Timezone IANA perangkat tidak dapat dibaca; QuranX memakai offset lokal saat ini.',
+        context: 'prayer.timezone',
+        stack: stack,
+      );
+    }
+  }
+
+  tz.TZDateTime _now() {
+    final current = DateTime.now();
+    return _timezoneConfigured
+        ? tz.TZDateTime.now(tz.local)
+        : tz.TZDateTime.from(current, tz.local);
+  }
+
+  tz.TZDateTime _atDeviceLocalTime(DateTime date, int hour, int minute) {
+    final localDateTime = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      hour,
+      minute,
+    );
+    return _timezoneConfigured
+        ? tz.TZDateTime(tz.local, date.year, date.month, date.day, hour, minute)
+        : tz.TZDateTime.from(localDateTime, tz.local);
   }
 
   Future<bool> requestNotificationPermission() async {
@@ -255,7 +305,7 @@ class PrayerReminderService {
       );
     }
     if (clearExisting) await plugin.cancelAll();
-    final now = tz.TZDateTime.now(tz.local);
+    final now = _now();
     for (final name in const ['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya']) {
       final parts = schedule.times[name]!.split(':');
       final hour = int.parse(parts[0]);
@@ -263,14 +313,7 @@ class PrayerReminderService {
       if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
         throw const FormatException('Komponen waktu sholat tidak valid');
       }
-      final base = tz.TZDateTime(
-        tz.local,
-        schedule.date.year,
-        schedule.date.month,
-        schedule.date.day,
-        hour,
-        minute,
-      );
+      final base = _atDeviceLocalTime(schedule.date, hour, minute);
       final scheduled = base.subtract(Duration(minutes: leadMinutes));
       if (!scheduled.isAfter(now)) continue;
       await _scheduleNotification(
@@ -302,6 +345,7 @@ class PrayerReminderService {
         'Izin notifikasi belum diberikan untuk pengingat sholat.',
       );
     }
+    await _syncDeviceTimezone();
     await plugin.cancelAll();
     final today = DateTime.now();
     PrayerSchedule? first;

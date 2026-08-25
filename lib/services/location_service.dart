@@ -62,6 +62,27 @@ PrayerCity? selectPrayerCity(String query, List<PrayerCity> cities) {
   return null;
 }
 
+const prayerCityIdKey = 'prayer_city_id';
+const prayerCityNameKey = 'prayer_city_name';
+const prayerCityRegionKey = 'prayer_city_region';
+
+PrayerCity? readSavedPrayerCity(SharedPreferences preferences) {
+  final id = int.tryParse(preferences.getString(prayerCityIdKey) ?? '');
+  final name = preferences.getString(prayerCityNameKey);
+  if (id == null || name == null || name.isEmpty) return null;
+  return PrayerCity(id: '$id', name: name);
+}
+
+Future<void> savePrayerCity(
+  SharedPreferences preferences,
+  PrayerCity city, {
+  String regionName = '',
+}) async {
+  await preferences.setString(prayerCityIdKey, city.id);
+  await preferences.setString(prayerCityNameKey, city.name);
+  await preferences.setString(prayerCityRegionKey, regionName);
+}
+
 class GpsPrayerResolver {
   final Geocoding geocoder = Geocoding();
 

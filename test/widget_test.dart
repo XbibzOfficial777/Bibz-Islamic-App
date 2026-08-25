@@ -95,6 +95,19 @@ void main() {
     expect(permanentlyDenied.permanentlyDenied, isTrue);
   });
 
+  test('selected prayer location persists and restores', () async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    const city = PrayerCity(id: '1629', name: 'KAB. TULUNGAGUNG');
+
+    await savePrayerCity(preferences, city, regionName: 'JAWA TIMUR');
+    final restored = readSavedPrayerCity(preferences);
+
+    expect(restored?.id, '1629');
+    expect(restored?.name, 'KAB. TULUNGAGUNG');
+    expect(preferences.getString(prayerCityRegionKey), 'JAWA TIMUR');
+  });
+
   test('GPS Tulungagung resolves through the QuranX city catalog', () {
     const city = PrayerCity(id: '1629', name: 'KAB. TULUNGAGUNG');
     final queries = buildPrayerLocationQueries([
