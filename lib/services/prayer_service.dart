@@ -136,8 +136,8 @@ class PrayerApiClient {
   void dispose() => _client.close();
 }
 
-const _adhanChannelId = 'quranx_prayer_adhan_v2';
-const _fallbackPrayerChannelId = 'quranx_prayer_default_v1';
+const _adhanChannelId = 'quranx_prayer_adhan_v3';
+const _fallbackPrayerChannelId = 'quranx_prayer_default_v2';
 
 class PrayerReminderService {
   PrayerReminderService(this.preferences);
@@ -231,6 +231,8 @@ class PrayerReminderService {
         category: AndroidNotificationCategory.alarm,
         playSound: true,
         sound: RawResourceAndroidNotificationSound('quranx_adhan'),
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+        enableVibration: true,
       );
 
   AndroidNotificationDetails get _fallbackDetails =>
@@ -243,6 +245,8 @@ class PrayerReminderService {
         priority: Priority.high,
         category: AndroidNotificationCategory.alarm,
         playSound: true,
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+        enableVibration: true,
       );
 
   Future<void> _scheduleNotification({
@@ -289,6 +293,22 @@ class PrayerReminderService {
         payload: payload,
       );
     }
+  }
+
+  Future<void> showAdhanTest() async {
+    await initialize();
+    final granted = await requestNotificationPermission();
+    if (!granted) {
+      throw const FileSystemException(
+        'Izin notifikasi belum diberikan untuk uji audio adzan.',
+      );
+    }
+    await plugin.show(
+      id: 4999,
+      title: 'Tes audio adzan',
+      body: 'Jika suara aktif, audio adzan akan terdengar sekarang.',
+      notificationDetails: NotificationDetails(android: _androidDetails),
+    );
   }
 
   Future<void> schedule(

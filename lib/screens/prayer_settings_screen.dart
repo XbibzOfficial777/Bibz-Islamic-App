@@ -29,6 +29,7 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
   String? locationSearchError;
   bool loading = false;
   bool scheduling = false;
+  bool testingAdhan = false;
   bool searchingLocations = false;
   DateTime now = DateTime.now();
   Timer? countdownTimer;
@@ -208,6 +209,30 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
     }
   }
 
+  Future<void> _testAdhan() async {
+    setState(() => testingAdhan = true);
+    try {
+      await reminders.showAdhanTest();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Notifikasi uji audio dikirim.')),
+        );
+      }
+    } catch (value, stack) {
+      if (mounted) {
+        setState(
+          () => error = DiagnosticLog.record(
+            value,
+            stack,
+            context: 'prayer.notification_sound_test',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => testingAdhan = false);
+    }
+  }
+
   Future<void> _scheduleReminders() async {
     final value = schedule;
     if (value == null) return;
@@ -323,6 +348,11 @@ class _PrayerSettingsScreenState extends State<PrayerSettingsScreen> {
               label: Text(
                 scheduling ? 'Menjadwalkan…' : 'Aktifkan notifikasi sholat',
               ),
+            ),
+            OutlinedButton.icon(
+              onPressed: testingAdhan ? null : _testAdhan,
+              icon: const Icon(Icons.volume_up_outlined),
+              label: Text(testingAdhan ? 'Mengirim…' : 'Uji audio adzan'),
             ),
             const SizedBox(height: 4),
             const Text(
