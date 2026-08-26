@@ -136,8 +136,10 @@ class PrayerApiClient {
   void dispose() => _client.close();
 }
 
-const _adhanChannelId = 'quranx_prayer_adhan_v3';
-const _fallbackPrayerChannelId = 'quranx_prayer_default_v2';
+const _adhanChannelId = 'quranx_prayer_adhan_v4';
+const _fallbackPrayerChannelId = 'quranx_prayer_default_v3';
+const quranxAdhanResourceUri =
+    'android.resource://com.all.bibz/raw/quranx_adhan';
 
 class PrayerReminderService {
   PrayerReminderService(this.preferences);
@@ -230,7 +232,7 @@ class PrayerReminderService {
         priority: Priority.high,
         category: AndroidNotificationCategory.alarm,
         playSound: true,
-        sound: RawResourceAndroidNotificationSound('quranx_adhan'),
+        sound: UriAndroidNotificationSound(quranxAdhanResourceUri),
         audioAttributesUsage: AudioAttributesUsage.alarm,
         enableVibration: true,
       );

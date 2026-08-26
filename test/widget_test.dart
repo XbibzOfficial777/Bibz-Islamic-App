@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -119,6 +120,17 @@ void main() {
     expect(queries, contains('Tulungagung'));
     expect(selectPrayerCity('Tulungagung', [city]), city);
     expect(selectPrayerCity('Kecamatan Tulungagung', [city]), city);
+  });
+
+  test('native adhan uses an explicit Android resource URI', () {
+    expect(
+      quranxAdhanResourceUri,
+      'android.resource://com.all.bibz/raw/quranx_adhan',
+    );
+    const sound = UriAndroidNotificationSound(
+      'android.resource://com.all.bibz/raw/quranx_adhan',
+    );
+    expect(sound.sound, quranxAdhanResourceUri);
   });
 
   test('prayer countdown reports the next prayer in hours minutes seconds', () {
