@@ -14,6 +14,8 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "quranx/diagnostics"
+        private const val ADHAN_CHANNEL = "quranx/adhan_audio"
+        private const val ADHAN_PREFS = "quranx_adhan_audio"
         private const val DIRECTORY_NAME = "QuranX/Logs"
         private val MEDIA_RELATIVE_PATH = "${Environment.DIRECTORY_DOWNLOADS}/$DIRECTORY_NAME/"
     }
@@ -53,6 +55,41 @@ class MainActivity : FlutterActivity() {
                     }
                 } catch (error: Exception) {
                     result.error("DIAGNOSTIC_STORAGE", error.message, null)
+                            }
+        }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ADHAN_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "playAdhanNow" -> {
+                            AdhanAudioService.start(this)
+                            result.success(null)
+                        }
+                        "scheduleAdhanAlarms" -> {
+                            val alarms = call.argument<List<Map<String, Any?>>>("alarms")
+                                ?: emptyList()
+                            AdhanAlarmScheduler.schedule(this, alarms)
+                            result.success(null)
+                        }
+                        "cancelAdhanAlarms" -> {
+                            AdhanAlarmScheduler.cancel(this)
+                            result.success(null)
+                        }
+                        "getLastAdhanAudioError" -> result.success(
+                            getSharedPreferences(ADHAN_PREFS, MODE_PRIVATE)
+                                .getString("last_error", null),
+                        )
+                        "clearLastAdhanAudioError" -> {
+                            getSharedPreferences(ADHAN_PREFS, MODE_PRIVATE)
+                                .edit()
+                                .remove("last_error")
+                                .apply()
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (error: Throwable) {
+                    result.error("ADHAN_AUDIO", error.message, null)
                 }
             }
     }

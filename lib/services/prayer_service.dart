@@ -136,10 +136,11 @@ class PrayerApiClient {
   void dispose() => _client.close();
 }
 
-const _adhanChannelId = 'quranx_prayer_adhan_v4';
-const _fallbackPrayerChannelId = 'quranx_prayer_default_v3';
+const _adhanChannelId = 'quranx_prayer_adhan_v5';
+const _fallbackPrayerChannelId = 'quranx_prayer_default_v4';
 const quranxAdhanResourceUri =
     'android.resource://com.all.bibz/raw/quranx_adhan';
+const _adhanAudioChannel = MethodChannel('quranx/adhan_audio');
 
 class PrayerReminderService {
   PrayerReminderService(this.preferences);
@@ -163,6 +164,28 @@ class PrayerReminderService {
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     );
     await plugin.initialize(settings: settings);
+    await _recordPendingNativeAudioError();
+  }
+
+  Future<void> _recordPendingNativeAudioError() async {
+    try {
+      final nativeError = await _adhanAudioChannel.invokeMethod<String?>(
+        'getLastAdhanAudioError',
+      );
+      if (nativeError == null || nativeError.isEmpty) return;
+      DiagnosticLog.record(
+        PlatformException(code: 'native_adhan_error', message: nativeError),
+        StackTrace.current,
+        context: 'prayer.notification_sound.native',
+      );
+      await _adhanAudioChannel.invokeMethod<void>('clearLastAdhanAudioError');
+    } catch (value, stack) {
+      DiagnosticLog.recordWarning(
+        'Status audio native tidak dapat dibaca.',
+        context: 'prayer.notification_sound.diagnostics',
+        stack: stack,
+      );
+    }
   }
 
   Future<void> _syncDeviceTimezone() async {
@@ -231,8 +254,7 @@ class PrayerReminderService {
         importance: Importance.max,
         priority: Priority.high,
         category: AndroidNotificationCategory.alarm,
-        playSound: true,
-        sound: UriAndroidNotificationSound(quranxAdhanResourceUri),
+        playSound: false,
         audioAttributesUsage: AudioAttributesUsage.alarm,
         enableVibration: true,
       );
@@ -257,11 +279,14 @@ class PrayerReminderService {
     required String body,
     required tz.TZDateTime scheduledDate,
     required String payload,
+    AndroidNotificationDetails? details,
   }) async {
     final notificationDetails = NotificationDetails(
-      android: _customAdhanSoundUsable == false
-          ? _fallbackDetails
-          : _androidDetails,
+      android:
+          details ??
+          (_customAdhanSoundUsable == false
+              ? _fallbackDetails
+              : _androidDetails),
     );
     try {
       await plugin.zonedSchedule(
@@ -305,12 +330,45 @@ class PrayerReminderService {
         'Izin notifikasi belum diberikan untuk uji audio adzan.',
       );
     }
-    await plugin.show(
-      id: 4999,
-      title: 'Tes audio adzan',
-      body: 'Jika suara aktif, audio adzan akan terdengar sekarang.',
-      notificationDetails: NotificationDetails(android: _androidDetails),
+    await _adhanAudioChannel.invokeMethod<void>('playAdhanNow');
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    final nativeError = await _adhanAudioChannel.invokeMethod<String?>(
+      'getLastAdhanAudioError',
     );
+    if (nativeError != null && nativeError.isNotEmpty) {
+      throw PlatformException(code: 'native_adhan_error', message: nativeError);
+    }
+    DiagnosticLog.recordInfo(
+      'Pemutaran audio adzan native dimulai dari perangkat.',
+      context: 'prayer.notification_sound_test',
+    );
+  }
+
+  List<Map<String, Object>> _nativeAlarmsForSchedule(
+    PrayerSchedule schedule, {
+    required int leadMinutes,
+    required int dayOffset,
+  }) {
+    final alarms = <Map<String, Object>>[];
+    for (final name in const ['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya']) {
+      final parts = schedule.times[name]!.split(':');
+      final scheduled = _atDeviceLocalTime(
+        schedule.date,
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+      ).subtract(Duration(minutes: leadMinutes));
+      if (!scheduled.isAfter(_now())) continue;
+      alarms.add(<String, Object>{
+        'id': _notificationId(name, dayOffset),
+        'triggerAtMillis': scheduled.millisecondsSinceEpoch,
+        'title': 'Notifikasi Sholat ${_displayName(name)}',
+        'body':
+            '${_displayName(name)} ${schedule.times[name]} • ${schedule.cityName}',
+        'payload':
+            '${schedule.cityId}|${schedule.date.toIso8601String()}|$name',
+      });
+    }
+    return alarms;
   }
 
   Future<void> schedule(
@@ -369,8 +427,10 @@ class PrayerReminderService {
     }
     await _syncDeviceTimezone();
     await plugin.cancelAll();
+    await _adhanAudioChannel.invokeMethod<void>('cancelAdhanAlarms');
     final today = DateTime.now();
     PrayerSchedule? first;
+    final nativeAlarms = <Map<String, Object>>[];
     for (var offset = 0; offset < 7; offset++) {
       final date = DateTime(today.year, today.month, today.day + offset);
       final value = await api.fetchSchedule(cityId, date);
@@ -381,6 +441,38 @@ class PrayerReminderService {
         dayOffset: offset,
         clearExisting: false,
       );
+      nativeAlarms.addAll(
+        _nativeAlarmsForSchedule(
+          value,
+          leadMinutes: leadMinutes,
+          dayOffset: offset,
+        ),
+      );
+    }
+    try {
+      await _adhanAudioChannel.invokeMethod<void>(
+        'scheduleAdhanAlarms',
+        <String, Object>{'alarms': nativeAlarms},
+      );
+    } catch (value, stack) {
+      DiagnosticLog.recordWarning(
+        'Penjadwalan audio native gagal; notifikasi akan memakai suara sistem.',
+        context: 'prayer.notification_sound.schedule',
+        stack: stack,
+      );
+      for (final alarm in nativeAlarms) {
+        await _scheduleNotification(
+          id: alarm['id']! as int,
+          title: alarm['title']! as String,
+          body: alarm['body']! as String,
+          scheduledDate: tz.TZDateTime.fromMillisecondsSinceEpoch(
+            tz.local,
+            alarm['triggerAtMillis']! as int,
+          ),
+          payload: alarm['payload']! as String,
+          details: _fallbackDetails,
+        );
+      }
     }
     if (first != null) {
       await preferences.setString('prayer_city_id', '$cityId');
